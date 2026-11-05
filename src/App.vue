@@ -17,6 +17,7 @@ import { appVersion, type RecoveryPoint, type UpdateStatus } from './update-api'
 import { prepareSession, serializeSession, SESSION_SCHEMA_VERSION, SESSION_THEMES, type SessionTheme } from './session'
 import { DEFAULT_STYLE, renderImage, renderPreview, calculateLayout, type Annotation, type EditorStyle } from './editor'
 import { normalizeRect, clampRect, type Rect, type Point } from './geometry'
+import { shortcutLabel } from './shortcuts'
 
 const view = ref(new URLSearchParams(location.search).get('view'))
 const desktop = isTauri()
@@ -38,6 +39,11 @@ const fontSize = ref(32)
 const text = ref('值得留住的灵感')
 const panel = ref<'beautify'|'annotate'>('beautify')
 const modal = ref<'history'|'settings'|null>(null)
+const settingsTabs = [{id:'appearance',label:'外观'},{id:'shortcuts',label:'快捷键'},{id:'general',label:'通用'},{id:'updates',label:'更新与恢复'},{id:'about',label:'关于'}] as const
+type SettingsTab = typeof settingsTabs[number]['id']
+const settingsTab = ref<SettingsTab>('shortcuts')
+const settingsContent = ref<HTMLElement>()
+const themePickerOpen = ref(false), themePicker = ref<HTMLElement>(), themeTrigger = ref<HTMLButtonElement>()
 const status = ref('图片只在本机处理，不上传。')
 const isError = ref(false)
 const renderError = ref('')
@@ -107,12 +113,56 @@ const annotationHint=computed(()=>tool.value==='text'?'在图片上点击放置�
 function feedback(message:string,error=false){status.value=message;isError.value=error}
 function snapshot():Snapshot{return {annotations:structuredClone(annotations.value.map(a=>({...a,points:a.points?.map(p=>({...p}))}))),crop:crop.value?{...crop.value}:undefined,style:{...style.value},background:backgroundImage.value}}
 function closeModal(){if(!updateBusy.value)modal.value=null}
+function openSettings(tab:SettingsTab='shortcuts'){
+  if(updateBusy.value&&tab!=='updates')return
+  if(themePickerOpen.value)themeTrigger.value?.focus()
+  themePickerOpen.value=false;settingsTab.value=tab;modal.value='settings'
+}
+async function selectSettingsTab(tab:SettingsTab){
+  if(updateBusy.value)return
+  settingsTab.value=tab;await nextTick()
+  if(settingsContent.value)settingsContent.value.scrollTop=0
+}
+function settingsTabKey(event:KeyboardEvent){
+  if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return
+  event.preventDefault();if(updateBusy.value)return
+  const index=settingsTabs.findIndex(tab=>tab.id===settingsTab.value)
+  const next=event.key==='Home'?0:event.key==='End'?settingsTabs.length-1:(index+(event.key==='ArrowRight'?1:-1)+settingsTabs.length)%settingsTabs.length
+  const tab=settingsTabs[next]!.id;void selectSettingsTab(tab)
+  void nextTick(()=>document.getElementById(`settings-tab-${tab}`)?.focus())
+}
+function chooseTheme(id:string){
+  if(actionsBlocked.value)return
+  appearance.value.enabled=false;theme.value=id
+}
+async function toggleThemePicker(){
+  if(actionsBlocked.value)return
+  themePickerOpen.value=!themePickerOpen.value
+  if(themePickerOpen.value){await nextTick();(themePicker.value?.querySelector<HTMLElement>('[aria-pressed=true]')||themePicker.value?.querySelector<HTMLElement>('button'))?.focus()}
+}
+function closeThemePicker(restoreFocus=false){
+  themePickerOpen.value=false
+  if(restoreFocus)themeTrigger.value?.focus()
+}
+function themePickerOutside(event:Event){
+  const target=event.target
+  if(themePickerOpen.value&&target instanceof Node&&!themePicker.value?.contains(target)&&!themeTrigger.value?.contains(target))closeThemePicker()
+}
+function themePickerKey(event:KeyboardEvent){
+  if(!['ArrowUp','ArrowDown','Home','End'].includes(event.key))return
+  const buttons=Array.from(themePicker.value?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')||[])
+  if(!buttons.length)return
+  event.preventDefault()
+  const index=buttons.indexOf(document.activeElement as HTMLButtonElement)
+  const next=event.key==='Home'?0:event.key==='End'?buttons.length-1:(index+(event.key==='ArrowDown'?1:-1)+buttons.length)%buttons.length
+  buttons[next]?.focus()
+}
 function setUpdateBusy(value:boolean){
   if(value&&!updateBusy.value){loadVersion++;backgroundVersion++;cancelPointer();cancelDelayIfPending()}
   updateBusy.value=value
 }
 function receiveUpdateStatus(value:UpdateStatus){
-  if(value.confirmationPending||['downloading','ready','backing-up','installing','installed','restart-required'].includes(value.phase))modal.value='settings'
+  if(value.confirmationPending||['downloading','ready','backing-up','installing','installed','restart-required'].includes(value.phase))openSettings('updates')
 }
 function embeddedBackground(background?:HTMLImageElement){
   if(!background)return undefined
@@ -157,7 +207,6 @@ function resetStyle(){
   backgroundVersion++;cancelPointer();checkpoint();backgroundImage.value=undefined;style.value={...DEFAULT_STYLE}
   feedback('已恢复默认美化，裁剪和标注保留；可撤销。')
 }
-function shortcutLabel(value:string){return value.replace(/CommandOrControl|CmdOrCtrl/g,isMac?'⌘':'Ctrl').replaceAll('+',' + ')}
 function usePreset(p:typeof presets[number]){if(actionsBlocked.value)return;backgroundVersion++;checkpoint();style.value={...style.value,background:'gradient',gradientFrom:p.from,gradientTo:p.to,gradientAngle:p.angle}}
 function remember(){const doc=documents.value.find(d=>d.id===currentId.value);if(doc){doc.state=snapshot();doc.undo=undoStack.value;doc.redo=redoStack.value}}
 async function decode(dataUrl:string,maxPixels=40_000_000){
@@ -289,18 +338,19 @@ async function exportImage(){if(busy.value||actionsBlocked.value)return;busy.val
 async function copyImage(){if(busy.value||actionsBlocked.value)return;busy.value=true;try{const dataUrl=output('png');if(desktop)await invoke('copy_image',{dataUrl});else{const blob=await(await fetch(dataUrl)).blob();await navigator.clipboard.write([new ClipboardItem({'image/png':blob})])}feedback('已复制图片到剪贴板')}catch(e){feedback(`复制失败：${String(e)}`,true)}finally{busy.value=false}}
 async function pinImage(){if(actionsBlocked.value)return;if(!desktop){feedback('置顶贴图需要桌面版；浏览器中可使用美化与导出。',true);return}try{await invoke('pin_image',{dataUrl:output('png')});feedback('已贴到桌面，按住图片即可拖动。')}catch(e){feedback(String(e),true)}}
 function selectTool(id:string){if(actionsBlocked.value)return;tool.value=id;if(id!=='cursor')panel.value='annotate';cancelPointer()}
-function onKey(event:KeyboardEvent){if(view.value||capturePreview.value||exitPending.value)return;if(event.key==='Tab'&&modal.value){const focusable=Array.from(document.querySelectorAll<HTMLElement>('.dialog button:not(:disabled),.dialog input:not(:disabled),.dialog select:not(:disabled),.dialog textarea:not(:disabled),.dialog summary')).filter(element=>element.getClientRects().length);const first=focusable[0],last=focusable.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus()}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus()}return}if(event.key==='Escape'){if(updateBusy.value){event.preventDefault();return}modal.value=null;cancelPointer();cancelDelayIfPending();return}if(modal.value||actionsBlocked.value){if((event.metaKey||event.ctrlKey)&&['s','o'].includes(event.key.toLowerCase()))event.preventDefault();return}if((event.target as HTMLElement)?.closest('input,textarea,select,[contenteditable]'))return;if((event.key==='Delete'||event.key==='Backspace')&&selectedId.value){event.preventDefault();deleteSelected();return}if(event.metaKey||event.ctrlKey){if(event.key.toLowerCase()==='z'){event.preventDefault();event.shiftKey?redo():undo()}else if(event.key.toLowerCase()==='s'){event.preventDefault();if(image.value)void exportImage()}else if(event.key.toLowerCase()==='o'){event.preventDefault();importInput.value?.click()}return}if(modal.value)return;const selected=tools.find(t=>t.key.toLowerCase()===event.key.toLowerCase());if(selected&&image.value){event.preventDefault();selectTool(selected.id)}}
+function onKey(event:KeyboardEvent){if(event.defaultPrevented||view.value||capturePreview.value||exitPending.value)return;if(themePickerOpen.value){if(event.key==='Escape'){event.preventDefault();closeThemePicker(true)}return;}if(event.key==='Tab'&&modal.value){const focusable=Array.from(document.querySelectorAll<HTMLElement>('.dialog button:not(:disabled),.dialog input:not(:disabled),.dialog select:not(:disabled),.dialog textarea:not(:disabled),.dialog summary,.dialog [tabindex]')).filter(element=>element.tabIndex>=0&&!element.matches(':disabled')&&element.getClientRects().length);const first=focusable[0],last=focusable.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus()}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus()}return}if(event.key==='Escape'){if(updateBusy.value){event.preventDefault();return}modal.value=null;cancelPointer();cancelDelayIfPending();return}if(modal.value||actionsBlocked.value){if((event.metaKey||event.ctrlKey)&&['s','o'].includes(event.key.toLowerCase()))event.preventDefault();return}if((event.target as HTMLElement)?.closest('input,textarea,select,[contenteditable]'))return;if((event.key==='Delete'||event.key==='Backspace')&&selectedId.value){event.preventDefault();deleteSelected();return}if(event.metaKey||event.ctrlKey){if(event.key.toLowerCase()==='z'){event.preventDefault();event.shiftKey?redo():undo()}else if(event.key.toLowerCase()==='s'){event.preventDefault();if(image.value)void exportImage()}else if(event.key.toLowerCase()==='o'){event.preventDefault();importInput.value?.click()}return}if(modal.value)return;const selected=tools.find(t=>t.key.toLowerCase()===event.key.toLowerCase());if(selected&&image.value){event.preventDefault();selectTool(selected.id)}}
 function cancelDelayIfPending(){if(delayTimer)cancelDelay()}
 watch([style,crop],()=>{updateFit();scheduleRender()},{deep:true})
 watch(annotations,scheduleRender,{deep:true})
 watch([fit,zoom],scheduleRender)
 watch(backgroundImage,scheduleRender)
 watch(capturePreview,async value=>{if(!value){await nextTick();resizeObserver?.disconnect();if(stage.value)resizeObserver?.observe(stage.value);updateFit();scheduleRender()}})
-watch(modal,async(value,previous)=>{if(value&&!previous)modalTrigger=document.activeElement as HTMLElement;await nextTick();if(value)document.querySelector<HTMLElement>('.dialog button')?.focus();else modalTrigger?.focus()})
+watch(actionsBlocked,value=>{if(value)closeThemePicker()})
+watch(modal,async(value,previous)=>{if(value)closeThemePicker();if(value&&!previous)modalTrigger=document.activeElement as HTMLElement;await nextTick();if(value)document.querySelector<HTMLElement>('.dialog button')?.focus();else modalTrigger?.focus()})
 watch(theme,value=>{document.documentElement.dataset.theme=value;applyAppearance(document.documentElement,appearance.value,['moon','plain','sakura'].includes(value));try{localStorage.setItem('starshot-theme',value)}catch{feedback('外观已应用，本地偏好保存失败。',true)}})
 watch(image,async()=>{await nextTick();resizeObserver?.disconnect();if(stage.value){resizeObserver?.observe(stage.value);updateFit();scheduleRender()}})
-onMounted(async()=>{document.documentElement.dataset.theme=theme.value;window.addEventListener('keydown',onKey);resizeObserver=new ResizeObserver(()=>{updateFit();scheduleRender()});if(stage.value)resizeObserver.observe(stage.value);if(desktop&&!view.value){try{const off1=await listen<{dataUrl:string;width:number;height:number;name:string}>('capture-complete',event=>void captured(event.payload));const off2=await listen<string>('capture-error',event=>feedback(event.payload,true));const off3=await listen<string>('pin-error',event=>feedback(event.payload,true));const off4=await listen('pin-edit-requested',()=>void receivePendingPinEdit());if(disposed){off1();off2();off3();off4();return}unlisten.push(off1,off2,off3,off4);const initialVersion=loadVersion;const last=await invoke<{dataUrl:string;width:number;height:number;name:string}|null>('get_current_image');if(last&&loadVersion===initialVersion&&!disposed&&!updateBusy.value)await loadImage(last);const state=await invoke<{captureAvailable:boolean;error?:string}>('get_app_status');if(state.error)feedback(state.error,true)}catch(e){feedback(`桌面服务：${String(e)}`,true)}}initialized.value=true;void reportEditorState();if(desktop&&!view.value)void receivePendingPinEdit()})
-onBeforeUnmount(()=>{disposed=true;loadVersion++;unlisten.forEach(off=>off());resizeObserver?.disconnect();window.removeEventListener('keydown',onKey);cancelAnimationFrame(renderRequest);cancelDelayIfPending()})
+onMounted(async()=>{document.documentElement.dataset.theme=theme.value;window.addEventListener('keydown',onKey);document.addEventListener('pointerdown',themePickerOutside);document.addEventListener('focusin',themePickerOutside);resizeObserver=new ResizeObserver(()=>{updateFit();scheduleRender()});if(stage.value)resizeObserver.observe(stage.value);if(desktop&&!view.value){try{const off1=await listen<{dataUrl:string;width:number;height:number;name:string}>('capture-complete',event=>void captured(event.payload));const off2=await listen<string>('capture-error',event=>feedback(event.payload,true));const off3=await listen<string>('pin-error',event=>feedback(event.payload,true));const off4=await listen('pin-edit-requested',()=>void receivePendingPinEdit());if(disposed){off1();off2();off3();off4();return}unlisten.push(off1,off2,off3,off4);const initialVersion=loadVersion;const last=await invoke<{dataUrl:string;width:number;height:number;name:string}|null>('get_current_image');if(last&&loadVersion===initialVersion&&!disposed&&!updateBusy.value)await loadImage(last);const state=await invoke<{captureAvailable:boolean;error?:string}>('get_app_status');if(state.error)feedback(state.error,true)}catch(e){feedback(`桌面服务：${String(e)}`,true)}}initialized.value=true;void reportEditorState();if(desktop&&!view.value)void receivePendingPinEdit()})
+onBeforeUnmount(()=>{disposed=true;loadVersion++;unlisten.forEach(off=>off());resizeObserver?.disconnect();window.removeEventListener('keydown',onKey);document.removeEventListener('pointerdown',themePickerOutside);document.removeEventListener('focusin',themePickerOutside);cancelAnimationFrame(renderRequest);cancelDelayIfPending()})
 
 function drawGuides(ctx:CanvasRenderingContext2D){
   const l=layout.value;if(!l)return
@@ -422,10 +472,20 @@ onMounted(async()=>{
     <input ref="backgroundInput" class="sr-only" type="file" accept="image/png,image/jpeg,image/webp" aria-label="导入背景图片" @change="onFile($event,true)" />
     <header class="app-header" :inert="actionsBlocked || undefined">
       <a class="brand" href="#" @click.prevent="modal=null"><img src="/starshot.svg" alt=""/><div><strong>星镜<span>STARSHOT</span></strong><small>截图 · 标注 · 图片美化</small></div></a>
-      <div class="header-actions"><span v-if="!desktop" class="preview-label">浏览器预览</span><button class="button subtle" @click="importInput?.click()"><Icon name="import" :size="16"/>导入图片</button><button class="button primary" :disabled="captureBusy" @click="startCapture"><Icon name="capture" :size="17"/>{{captureBusy?'准备截图…':'开始截图'}}<kbd v-if="desktop">{{shortcutLabel(shortcuts.captureShortcut)}}</kbd></button></div>
+      <div class="header-actions"><span v-if="!desktop" class="preview-label">浏览器预览</span><button class="button subtle" @click="importInput?.click()"><Icon name="import" :size="16"/>导入图片</button><button class="button primary" :disabled="captureBusy" @click="startCapture"><Icon name="capture" :size="17"/>{{captureBusy?'准备截图…':'开始截图'}}<kbd v-if="desktop">{{shortcutLabel(shortcuts.captureShortcut,isMac)}}</kbd></button></div>
     </header>
     <div class="workspace" :inert="actionsBlocked || undefined">
-      <nav class="side-rail" aria-label="工作区导航"><div class="rail-top"><button class="rail-button active" title="图片工作台" aria-label="图片工作台" @click="modal=null"><Icon name="image"/></button><button class="rail-button" title="最近图片 · 当前会话" aria-label="最近图片" @click="modal='history'"><Icon name="history"/><i v-if="documents.length"/></button></div><div class="rail-bottom"><span class="local-dot" title="本地处理 · 无上传"/><button class="rail-button" title="外观与使用说明" aria-label="设置与帮助" @click="modal='settings'"><Icon name="settings"/></button></div></nav>
+      <nav class="side-rail" aria-label="工作区导航"><div class="rail-top"><button class="rail-button active" title="图片工作台" aria-label="图片工作台" @click="modal=null"><Icon name="image"/></button><button class="rail-button" title="最近图片 · 当前会话" aria-label="最近图片" @click="modal='history'"><Icon name="history"/><i v-if="documents.length"/></button></div><div class="rail-bottom"><span class="local-dot" title="本地处理 · 无上传"/>
+        <div class="theme-picker-anchor">
+          <button ref="themeTrigger" class="rail-button" :class="{active:themePickerOpen}" title="快速切换主题" aria-label="快速切换主题" aria-haspopup="dialog" :aria-expanded="themePickerOpen" aria-controls="quick-theme-picker" :disabled="actionsBlocked" @click="toggleThemePicker"><Icon name="palette"/></button>
+          <section v-if="themePickerOpen" id="quick-theme-picker" ref="themePicker" class="theme-popover" role="dialog" aria-label="快速切换主题" @keydown="themePickerKey">
+            <h3>界面主题</h3>
+            <button v-for="t in themes" :key="t.id" class="theme-choice" :aria-pressed="theme===t.id&&!appearance.enabled" @click="chooseTheme(t.id)"><span class="theme-dot" :class="`theme-dot-${t.id}`"/><span>{{t.label}}</span><Icon v-if="theme===t.id&&!appearance.enabled" name="check" :size="15"/></button>
+            <button class="theme-more" @click="openSettings('appearance')">更多外观设置 <Icon name="chevron" :size="13"/></button>
+          </section>
+        </div>
+        <button class="rail-button" title="设置与帮助" aria-label="设置与帮助" @click="openSettings()"><Icon name="settings"/></button>
+      </div></nav>
       <main class="main-workspace">
         <div class="document-bar"><div class="document-title"><Icon :name="image?'image':'spark'" :size="16"/><span>{{image?currentName:'你的灵感，值得被好好看见。'}}</span><span v-if="image" class="muted">{{size.width}} × {{size.height}}</span></div><div v-if="image" class="inline-actions"><button class="icon-button" title="撤销 ⌘/Ctrl Z" aria-label="撤销" :disabled="!undoStack.length" @click="undo"><Icon name="undo" :size="17"/></button><button class="icon-button" title="重做 ⇧ ⌘/Ctrl Z" aria-label="重做" :disabled="!redoStack.length" @click="redo"><Icon name="redo" :size="17"/></button><span class="divider"/><button class="button text-button" @click="pinImage"><Icon name="pin" :size="15"/>贴到桌面</button></div></div>
         <div v-if="!image" class="welcome" ref="stage"><div class="welcome-art"><div class="orbit orbit-one"/><div class="orbit orbit-two"/><span class="tiny-star s-one">✦</span><span class="tiny-star s-two">✧</span><div class="art-frame"><Icon name="capture" :size="68"/><div class="frame-cursor"><Icon name="cursor" :size="24"/></div></div></div><div class="eyebrow">A LITTLE SPACE FOR YOUR IDEAS</div><h1>把灵感，定格成星。</h1><p>轻轻一截，再添一点自己的风格。<br/>从屏幕上的一个瞬间，到值得分享的一张好图。</p><div class="welcome-actions"><button class="button primary large" @click="startCapture"><Icon name="capture"/>开始截图</button><button class="button large" @click="importInput?.click()"><Icon name="import"/>导入图片</button></div><button class="demo-link" @click="loadDemo">用一张原创示例，试试星镜 <Icon name="chevron" :size="14"/></button><div class="welcome-features"><div><Icon name="capture"/><strong>聪明地框选</strong><span>窗口吸附 · 像素微调</span></div><div><Icon name="pen"/><strong>清楚地表达</strong><span>箭头文字 · 马赛克</span></div><div><Icon name="spark"/><strong>好看地分享</strong><span>背景边框 · 圆角阴影</span></div></div></div>
@@ -440,8 +500,37 @@ onMounted(async()=>{
         <div class="export-panel"><label class="export-name"><span>导出文件名</span><input v-model="exportName" aria-label="导出文件名" :disabled="!image" maxlength="100"/></label><div class="export-options"><select v-model="format" aria-label="导出格式"><option value="png">PNG</option><option value="jpeg">JPEG</option></select><select v-model="outputScale" aria-label="导出倍率"><option :value="1">1× 原尺寸</option><option :value="2">2× 高清</option></select><span>{{image?outputSize:'—'}}</span></div><div class="export-buttons"><button class="button copy-button" :disabled="!image||busy||outputSize==='尺寸超限'" title="复制图片" aria-label="复制图片" @click="copyImage"><Icon name="copy" :size="18"/></button><button class="button primary export-button" :disabled="!image||busy||outputSize==='尺寸超限'" @click="exportImage"><Icon name="save" :size="17"/>{{busy?'处理中…':'导出图片'}}</button></div></div>
       </aside>
     </div>
-    <footer class="status-bar" :class="{error:isError||renderError}" role="status"><span class="status-message"><span class="status-led"/>{{renderError||status}}</span><button v-if="captureBusy&&captureDelay" class="status-cancel" @click="cancelDelay">取消截图</button><button v-if="recoveryAvailable&&!updateBusy" class="status-cancel" @click="modal='settings'">可恢复升级前会话</button><button v-if="savedPath&&desktop&&!actionsBlocked" class="status-cancel" @click="invoke('reveal_saved_image').then(()=>feedback('已请求在文件管理器中显示。')).catch(e=>feedback(String(e),true))">显示已保存文件</button><span class="status-brand">LOCAL FIRST<span>✦</span>星镜 {{appVersion}}</span></footer>
-    <div v-show="modal" class="modal-backdrop" @click.self="closeModal"><section class="dialog" role="dialog" aria-modal="true" :aria-label="modal==='history'?'最近图片':'设置与帮助'"><header><div><h2>{{modal==='history'?'最近图片':'星镜 · 设置与帮助'}}</h2><p>{{modal==='history'?'仅保留当前会话，关闭软件后清空。':'本地优先，让每一次截图都安心。'}}</p></div><button class="icon-button" aria-label="关闭弹窗" :disabled="updateBusy" @click="closeModal"><Icon name="close"/></button></header><template v-if="modal==='history'"><div v-if="!documents.length" class="empty-history"><Icon name="image" :size="32"/><p>还没有图片，先截取一张吧。</p></div><div class="history-grid"><button v-for="doc in documents" :key="doc.id" @click="openDocument(doc)"><img :src="doc.dataUrl" alt=""/><span>{{doc.name}}</span><small>{{doc.width}} × {{doc.height}}</small></button></div></template><div v-show="modal==='settings'"><fieldset :disabled="updateBusy"><section class="settings-section"><h3>界面外观</h3><div class="theme-options"><button v-for="t in themes" :key="t.id" :class="{active:theme===t.id}" @click="theme=t.id">{{t.label}}</button></div></section><section class="settings-section"><h3>自定义界面配色</h3><label class="field-note"><input v-model="appearance.enabled" type="checkbox"/>启用自己的配色</label><div class="color-pair"><label>起始<input v-model="appearance.from" type="color" aria-label="界面起始颜色"/></label><label>结束<input v-model="appearance.to" type="color" aria-label="界面结束颜色"/></label><input v-model.number="appearance.angle" type="number" min="0" max="360" aria-label="界面渐变方向"/>°</div><p class="field-note">界面配色与导出图片的背景分别设置。</p></section><DesktopSettings @shortcuts="shortcuts=$event"/><section class="settings-section"><label class="select-line"><span>延时截图</span><select v-model.number="captureDelay" aria-label="延时截图"><option :value="0">立即</option><option :value="3">3 秒</option><option :value="5">5 秒</option><option :value="10">10 秒</option></select></label><p class="field-note">延时只作用于「开始截图」按钮，全局快捷键立即截图。</p></section><section class="settings-section shortcut-list"><h3>快捷操作</h3><p class="field-note">关闭主窗口会收起到托盘。退出前请先备份会话，再从托盘选择「退出星镜」；Mac 的 ⌘Q 也会检查未备份进度，Dock 菜单退出暂不提供这项保护。</p><div><span>开始截图</span><kbd>{{shortcutLabel(shortcuts.captureShortcut)}}</kbd></div><div><span>贴出最近截图原图</span><kbd>{{shortcutLabel(shortcuts.pinShortcut)}}</kbd></div><div><span>导出图片 / 撤销</span><kbd>⌘ / Ctrl + S / Z</kbd></div><div><span>复制截图 / 取消截图</span><kbd>Enter / Esc</kbd></div></section><section class="settings-section"><h3>关于这个版本</h3><p class="field-note">截图按需触发，不监听剪贴板，不上传图片。当前会话最多保留 6 张原图与各自编辑，内存预算 4800 万像素；普通编辑只留在内存，导出、手动备份或安装更新时才写入图片文件。</p><p class="field-note">区域预判结合窗口边界和图片边缘；Mac 已有辅助功能授权时可查询控件边界。选区工具条支持手动逐屏长截图；贴图可双击关闭、右键操作。敏感信息识别仅在点击时使用本地 OCR。macOS 首次截图需要系统屏幕录制权限。</p><button class="button full" @click="modal=null;capturePreview=true">体验区域选择（原创示例）</button></section></fieldset><ShareSettings :disabled="updateBusy||exitPending||privacyBusy"/><UpdateSettings :disabled="busy||captureBusy||ioPending>0||privacyBusy||exitPending||releasePending" :get-session="getSession" :restore-session="restoreSession" @busy="setUpdateBusy" @status="receiveUpdateStatus" @recovery-available="recoveryAvailable=$event" @backed-up="dirty=false" /></div></section></div>
+    <footer class="status-bar" :class="{error:isError||renderError}" role="status"><span class="status-message"><span class="status-led"/>{{renderError||status}}</span><button v-if="captureBusy&&captureDelay" class="status-cancel" @click="cancelDelay">取消截图</button><button v-if="recoveryAvailable&&!updateBusy" class="status-cancel" @click="openSettings('updates')">可恢复升级前会话</button><button v-if="savedPath&&desktop&&!actionsBlocked" class="status-cancel" @click="invoke('reveal_saved_image').then(()=>feedback('已请求在文件管理器中显示。')).catch(e=>feedback(String(e),true))">显示已保存文件</button><span class="status-brand">LOCAL FIRST<span>✦</span>星镜 {{appVersion}}</span></footer>
+    <div v-show="modal" class="modal-backdrop" @click.self="closeModal">
+      <section class="dialog" :class="{'settings-dialog':modal==='settings'}" role="dialog" aria-modal="true" :aria-label="modal==='history'?'最近图片':'设置与帮助'">
+        <header><div><h2>{{modal==='history'?'最近图片':'星镜 · 设置与帮助'}}</h2><p>{{modal==='history'?'仅保留当前会话，关闭软件后清空。':'本地优先，让每一次截图都安心。'}}</p></div><button class="icon-button" aria-label="关闭弹窗" :disabled="updateBusy" @click="closeModal"><Icon name="close"/></button></header>
+        <template v-if="modal==='history'"><div v-if="!documents.length" class="empty-history"><Icon name="image" :size="32"/><p>还没有图片，先截取一张吧。</p></div><div class="history-grid"><button v-for="doc in documents" :key="doc.id" @click="openDocument(doc)"><img :src="doc.dataUrl" alt=""/><span>{{doc.name}}</span><small>{{doc.width}} × {{doc.height}}</small></button></div></template>
+        <div v-show="modal==='settings'" class="settings-layout">
+          <div class="settings-tabs" role="tablist" aria-label="设置分类" @keydown="settingsTabKey">
+            <button v-for="tab in settingsTabs" :id="`settings-tab-${tab.id}`" :key="tab.id" role="tab" :aria-selected="settingsTab===tab.id" :aria-controls="`settings-panel-${tab.id}`" :tabindex="settingsTab===tab.id?0:-1" :disabled="updateBusy" @click="selectSettingsTab(tab.id)">{{tab.label}}</button>
+          </div>
+          <div ref="settingsContent" class="settings-content">
+            <fieldset :disabled="updateBusy">
+              <div v-show="settingsTab==='appearance'" id="settings-panel-appearance" role="tabpanel" aria-labelledby="settings-tab-appearance" tabindex="0">
+                <section class="settings-section"><h3>界面外观</h3><div class="theme-options"><button v-for="t in themes" :key="t.id" :class="{active:theme===t.id&&!appearance.enabled}" :aria-pressed="theme===t.id&&!appearance.enabled" @click="chooseTheme(t.id)"><span class="theme-dot" :class="`theme-dot-${t.id}`"/>{{t.label}}</button></div></section>
+                <section class="settings-section"><h3>自定义界面配色</h3><label class="field-note"><input v-model="appearance.enabled" type="checkbox"/>启用自己的配色</label><div class="color-pair"><label>起始<input v-model="appearance.from" type="color" aria-label="界面起始颜色"/></label><label>结束<input v-model="appearance.to" type="color" aria-label="界面结束颜色"/></label><input v-model.number="appearance.angle" type="number" min="0" max="360" aria-label="界面渐变方向"/>°</div><p class="field-note">选择预设主题会关闭自定义配色，颜色仍保留。界面外观与导出图片的背景分别设置。</p></section>
+              </div>
+              <DesktopSettings :section="modal==='settings'&&(settingsTab==='shortcuts'||settingsTab==='general')?settingsTab:null" @shortcuts="shortcuts=$event">
+                <template #general><section class="settings-section"><label class="select-line"><span>延时截图</span><select v-model.number="captureDelay" aria-label="延时截图"><option :value="0">立即</option><option :value="3">3 秒</option><option :value="5">5 秒</option><option :value="10">10 秒</option></select></label><p class="field-note">延时只作用于「开始截图」按钮，全局快捷键立即截图。</p><p class="field-note">关闭主窗口会收起到托盘。退出前请先备份会话，再从托盘选择「退出星镜」；Mac 的 ⌘Q 也会检查未备份进度，Dock 菜单退出暂不提供这项保护。</p></section></template>
+                <template #shortcuts><section class="settings-section shortcut-list"><h3>编辑与截图操作</h3><div><span>开始截图</span><kbd>{{shortcutLabel(shortcuts.captureShortcut,isMac)}}</kbd></div><div><span>贴出最近截图原图</span><kbd>{{shortcutLabel(shortcuts.pinShortcut,isMac)}}</kbd></div><div><span>导出图片 / 撤销</span><kbd>⌘ / Ctrl + S / Z</kbd></div><div><span>复制截图 / 取消截图</span><kbd>Enter / Esc</kbd></div><div><span>全屏选区 / 贴图</span><kbd>⌘ / Ctrl + A / T</kbd></div><div><span>复制颜色 / 切换格式</span><kbd>C / 轻按 Shift</kbd></div></section></template>
+              </DesktopSettings>
+              <div v-show="settingsTab==='about'" id="settings-panel-about" role="tabpanel" aria-labelledby="settings-tab-about" tabindex="0">
+                <section class="settings-section"><h3>关于星镜 {{appVersion}}</h3><p class="field-note">截图按需触发，不监听剪贴板，不上传图片。当前会话最多保留 6 张原图与各自编辑，内存预算 4800 万像素；普通编辑只留在内存，导出、手动备份或安装更新时才写入图片文件。</p><p class="field-note">区域预判结合窗口边界和图片边缘；Mac 已有辅助功能授权时可查询控件边界。选区工具条支持手动逐屏长截图；贴图可双击关闭、右键操作。敏感信息识别仅在点击时使用本地 OCR。macOS 首次截图需要系统屏幕录制权限。</p><button class="button full" @click="modal=null;capturePreview=true">体验区域选择（原创示例）</button></section>
+                <ShareSettings :disabled="updateBusy||exitPending||privacyBusy"/>
+              </div>
+            </fieldset>
+            <div v-show="settingsTab==='updates'" id="settings-panel-updates" role="tabpanel" aria-labelledby="settings-tab-updates" tabindex="0">
+              <UpdateSettings :disabled="busy||captureBusy||ioPending>0||privacyBusy||exitPending||releasePending" :get-session="getSession" :restore-session="restoreSession" @busy="setUpdateBusy" @status="receiveUpdateStatus" @recovery-available="recoveryAvailable=$event" @backed-up="dirty=false" />
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
     <dialog ref="exitDialog" class="dialog exit-dialog" @cancel.prevent="cancelExit"><h2>退出前保留编辑进度？</h2><p class="field-note">当前会话尚有未备份的修改。图片文件导出不包含可继续编辑的状态。</p><p v-if="exitError" class="field-note" role="alert">{{exitError}}</p><div class="exit-actions"><button class="button" :disabled="exitWorking" @click="cancelExit">取消</button><button class="button" :disabled="exitWorking" @click="finishExit(false)">直接退出</button><button class="button primary" :disabled="exitWorking" @click="finishExit(true)">{{exitWorking?'正在保存…':'备份并退出'}}</button></div></dialog>
   </div>
 </template>

@@ -95,6 +95,7 @@ try {
   await page.click('loc=role:button[name="用一张原创示例，试试星镜"]');
   await page.waitForFunction(() => document.querySelector('.document-title')?.textContent?.includes('灵感手记'));
   await page.click('loc=role:button[name="设置与帮助"]');
+  await page.click('loc=role:tab[name="更新与恢复"]');
   console.log(await page.snapshot({ scope: 'full_page' }));
   await page.click('loc=role:button[name="备份当前会话"]');
   await page.waitForFunction(() => document.querySelector('.update-notice')?.textContent?.includes('已保存'));
@@ -209,6 +210,7 @@ try {
   assert.equal(await page.evaluate(() => !!document.querySelector('[data-update-install-dialog][open]') || window._starshotMock.status.confirmationPending), false);
   results.push({ name: 'native ready gate opens dialog; failed cancellation keeps lock; successful delayed cancellation unlocks once; deferred reads do not reopen', pass: true });
 
+  await page.click('loc=role:tab[name="外观"]');
   await page.click('loc=role:button[name="月白"]');
   await page.click('loc=role:button[name="关闭弹窗"]');
   console.log(await page.snapshot());
@@ -216,6 +218,7 @@ try {
   await page.keyboard.press('End');
   await page.waitForFunction(() => document.querySelector('input[aria-label="四周留白"]').value === '200');
   await page.click('loc=role:button[name="设置与帮助"]');
+  await page.click('loc=role:tab[name="更新与恢复"]');
   await page.evaluate(() => {window._starshotMock.captureActive=true;});
   await page.click('loc=role:button[name="安装并重启"]');
   await page.waitForFunction(() => !document.querySelector('.workspace').inert && document.querySelector('.update-error')?.textContent.includes('正在截图'));
