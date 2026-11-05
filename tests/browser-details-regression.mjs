@@ -110,13 +110,17 @@ const readShortcuts = () => page.evaluate(() => ({
   mac: navigator.platform.includes('Mac'), header: document.querySelector('.header-actions kbd')?.textContent.trim(),
   help: [...document.querySelectorAll('.shortcut-list > div')].slice(0, 2).map(row => row.querySelector('kbd').textContent.trim()),
   capture: document.querySelector('[aria-label="开始截图快捷键"]').value, pin: document.querySelector('[aria-label="贴图快捷键"]').value,
-  message: document.querySelector('[aria-label="开始截图快捷键"]').closest('.settings-section').querySelector('[role="status"]')?.textContent || '',
+  message: document.querySelector('.desktop-settings-message')?.textContent || '',
 }))
-const assertShortcuts = (actual, capture, pin) => {
-  const label = value => value.replace(/CommandOrControl|CmdOrCtrl/g, actual.mac ? '⌘' : 'Ctrl').replaceAll('+', ' + ');
-  assert.equal(actual.header, label(capture)); assert.deepEqual(actual.help, [label(capture), label(pin)]);
-  assert.equal(actual.capture, capture); assert.equal(actual.pin, pin);
+const assertShortcuts = async (actual, capture, pin, draftCapture = capture, draftPin = pin) => {
+  const labels = await page.evaluate(async ({ capture, pin, mac }) => {
+    const { shortcutLabel } = await import('/src/shortcuts.ts');
+    return [shortcutLabel(capture, mac), shortcutLabel(pin, mac)];
+  }, { capture, pin, mac: actual.mac });
+  assert.equal(actual.header, labels[0]); assert.deepEqual(actual.help, labels);
+  assert.equal(actual.capture, draftCapture); assert.equal(actual.pin, draftPin);
 };
+const readHalo = () => page.evaluate(() => [...document.querySelectorAll('.desktop-settings .setting-check')].find(label => label.textContent.includes('显示贴图焦点光圈')).querySelector('input').checked);
 const readEditor = () => page.evaluate(() => {
   const s = document.querySelector('canvas[aria-label="图片编辑画布"]').__vueParentComponent.setupState;
   return JSON.parse(JSON.stringify({ id: s.currentId, source: s.image.src, name: s.currentName, size: s.size,
@@ -212,11 +216,12 @@ try {
   results.push({ name: 'reset invalidates a pending background read; late completion cannot change pixels, status or undo history', pass: true });
 
   await click('button[aria-label="设置与帮助"]');
-  let shortcuts = await readShortcuts(); assertShortcuts(shortcuts, 'CommandOrControl+Shift+7', 'CommandOrControl+Alt+8');
+  await click('#settings-tab-shortcuts');
+  let shortcuts = await readShortcuts(); await assertShortcuts(shortcuts, 'CommandOrControl+Shift+7', 'CommandOrControl+Alt+8');
   await input('开始截图快捷键', 'CommandOrControl+Shift+6'); await input('贴图快捷键', 'CommandOrControl+Alt+9');
   await clickText('保存桌面设置');
-  await wait(() => document.querySelector('[aria-label="开始截图快捷键"]').closest('.settings-section').querySelector('[role="status"]')?.textContent.includes('已保存并生效'));
-  shortcuts = await readShortcuts(); assertShortcuts(shortcuts, 'CommandOrControl+Shift+6', 'CommandOrControl+Alt+9');
+  await wait(() => document.querySelector('.desktop-settings-message')?.textContent.includes('桌面设置已保存'));
+  shortcuts = await readShortcuts(); await assertShortcuts(shortcuts, 'CommandOrControl+Shift+6', 'CommandOrControl+Alt+9');
   assert.deepEqual(await page.evaluate(() => window._detailsMock.calls.filter(call => call.command === 'set_desktop_settings').at(-1).args.settings), { captureShortcut: 'CommandOrControl+Shift+6', pinShortcut: 'CommandOrControl+Alt+9', startInTray: false, autostart: false, pinHalo: true });
   results.push({ name: 'native initial settings and successful save update both header and help shortcut labels', pass: true, header: shortcuts.header, help: shortcuts.help });
 
@@ -228,33 +233,40 @@ try {
   });
   await input('开始截图快捷键', 'CommandOrControl+Shift+0'); await input('贴图快捷键', 'CommandOrControl+Alt+0');
   await clickText('保存桌面设置');
-  await wait(() => document.querySelector('[aria-label="开始截图快捷键"]').closest('.settings-section').querySelector('[role="status"]')?.textContent.includes('原创测试：快捷键保存失败'));
-  shortcuts = await readShortcuts(); assertShortcuts(shortcuts, 'CommandOrControl+Shift+5', 'CommandOrControl+Alt+4');
+  await wait(() => document.querySelector('.desktop-settings-message')?.textContent.includes('原创测试：快捷键保存失败'));
+  const fallbackCapture = 'CommandOrControl+Shift+5', fallbackPin = 'CommandOrControl+Alt+4';
+  shortcuts = await readShortcuts(); await assertShortcuts(shortcuts, fallbackCapture, fallbackPin, 'CommandOrControl+Shift+0', 'CommandOrControl+Alt+0');
   assert.equal(await page.evaluate(() => window._detailsMock.calls.filter(call => call.command === 'get_desktop_settings').length), readsBeforeFailure + 1);
   assert.match(shortcuts.message, /原创测试：快捷键保存失败/);
-  results.push({ name: 'failed save re-reads actual native bindings into inputs, header and help while retaining the failure message', pass: true, header: shortcuts.header, help: shortcuts.help });
+  results.push({ name: 'failed save preserves input drafts and failure message while re-reading actual native bindings for header and help', pass: true, header: shortcuts.header, help: shortcuts.help });
 
-  assert.equal(await page.evaluate(() => document.querySelector('[aria-label="贴图焦点光圈"]').checked), true);
+  await click('#settings-tab-general');
+  assert.equal(await readHalo(), true);
+  await click('#settings-tab-shortcuts');
   await input('开始截图快捷键', 'CommandOrControl+Shift+3'); await input('贴图快捷键', 'CommandOrControl+Alt+1');
   await page.evaluate(() => { window._detailsMock.settings.pinHalo = false; window._detailsMock.emit('pin-halo', false); });
-  await wait(() => !document.querySelector('[aria-label="贴图焦点光圈"]').checked);
+  await click('#settings-tab-general');
+  await wait(() => ![...document.querySelectorAll('.desktop-settings .setting-check')].find(label => label.textContent.includes('显示贴图焦点光圈')).querySelector('input').checked);
+  await click('#settings-tab-shortcuts');
   const draftsAfterHalo = await readShortcuts();
   assert.equal(draftsAfterHalo.capture, 'CommandOrControl+Shift+3'); assert.equal(draftsAfterHalo.pin, 'CommandOrControl+Alt+1');
   assert.equal(draftsAfterHalo.header, shortcuts.header); assert.deepEqual(draftsAfterHalo.help, shortcuts.help);
-  await input('开始截图快捷键', shortcuts.capture); await input('贴图快捷键', shortcuts.pin);
+  await input('开始截图快捷键', fallbackCapture); await input('贴图快捷键', fallbackPin);
   results.push({ name: 'shared halo changes update only the checkbox and preserve unsaved shortcut inputs and actual-binding labels', pass: true });
 
   await page.evaluate(() => {
     const mock = window._detailsMock;
     mock.holdSettingsGet = true; mock.settingsRefreshDone = false;
-    const settings = document.querySelector('[aria-label="开始截图快捷键"]').closest('.settings-section').__vueParentComponent.setupState;
+    const settings = document.querySelector('[aria-label="开始截图快捷键"]').closest('.desktop-settings').__vueParentComponent.setupState;
     void settings.refresh().then(() => { mock.settingsRefreshDone = true; });
   });
   await wait(() => typeof window._detailsMock.finishSettingsGet === 'function');
   await page.evaluate(() => { window._detailsMock.settings.pinHalo = true; window._detailsMock.emit('pin-halo', true); window._detailsMock.finishSettingsGet(); });
   await wait(() => window._detailsMock.settingsRefreshDone);
-  assert.equal(await page.evaluate(() => document.querySelector('[aria-label="贴图焦点光圈"]').checked), true);
-  assertShortcuts(await readShortcuts(), shortcuts.capture, shortcuts.pin);
+  await click('#settings-tab-general');
+  assert.equal(await readHalo(), true);
+  await click('#settings-tab-shortcuts');
+  await assertShortcuts(await readShortcuts(), fallbackCapture, fallbackPin);
 
   await input('开始截图快捷键', 'CommandOrControl+Shift+6');
   await page.evaluate(() => { window._detailsMock.holdSettingsSave = true; });
@@ -262,12 +274,15 @@ try {
   await wait(() => typeof window._detailsMock.finishSettingsSave === 'function');
   await page.evaluate(() => { window._detailsMock.settings.pinHalo = false; window._detailsMock.emit('pin-halo', false); window._detailsMock.finishSettingsSave(); });
   await wait(() => !document.querySelector('[aria-label="开始截图快捷键"]').matches(':disabled'));
-  assert.equal(await page.evaluate(() => document.querySelector('[aria-label="贴图焦点光圈"]').checked), false);
-  assertShortcuts(await readShortcuts(), 'CommandOrControl+Shift+6', shortcuts.pin);
+  await click('#settings-tab-general');
+  assert.equal(await readHalo(), false);
+  await click('#settings-tab-shortcuts');
+  await assertShortcuts(await readShortcuts(), 'CommandOrControl+Shift+6', fallbackPin);
   assert.equal(await page.evaluate(() => window._detailsMock.calls.filter(call => call.command === 'set_desktop_settings').at(-1).args.settings.pinHalo), true);
   results.push({ name: 'settings get/save responses cannot overwrite a newer shared halo event; saved shortcuts still reach inputs and labels', pass: true });
 
-  const help = await page.evaluate(() => document.querySelector('.dialog').textContent);
+  await click('#settings-tab-about');
+  const help = await page.evaluate(() => document.querySelector('#settings-panel-about').textContent);
   assert.match(help, /手动逐屏长截图/); assert.doesNotMatch(help, /滚动长截图与系统控件级识别尚未提供/);
   assert.deepEqual(await page.evaluate(() => window._detailsMock.unexpected), []);
   results.push({ name: 'about text describes implemented scrolling capture; no unexpected native operations occurred', pass: true });

@@ -1,5 +1,6 @@
 //! macOS Carbon registrations are shared by default. Probe with the SDK's
-//! kEventHotKeyExclusive option so another app's non-exclusive binding is visible.
+//! kEventHotKeyExclusive option to detect conflicting exclusive registrations.
+//! macOS can still accept this probe while another app has a shared registration.
 use std::{
     ffi::c_void,
     sync::{
