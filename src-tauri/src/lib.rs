@@ -78,6 +78,8 @@ mod capability_tests {
             ("read_recovery_point", [true, false, false]),
             ("restart_app", [true, false, false]),
             ("get_desktop_settings", [true, false, false]),
+            ("check_desktop_shortcuts", [true, false, false]),
+            ("set_shortcut_recording", [true, false, false]),
             ("set_desktop_settings", [true, false, false]),
             ("set_editor_state", [true, false, false]),
             ("request_exit", [true, false, false]),

@@ -7,10 +7,10 @@ use image::{DynamicImage, ImageFormat};
 use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io::Cursor,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc, Arc, Mutex, MutexGuard,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -176,6 +176,8 @@ struct Context {
     pins: Mutex<HashMap<String, ImagePayload>>,
     sequence: AtomicU64,
     shortcut_error: Mutex<Option<String>>,
+    shortcut_probes: Mutex<HashSet<u32>>,
+    shortcut_recording: AtomicBool,
     settings: Mutex<DesktopSettings>,
     editor: Mutex<EditorLifecycle>,
     last_saved: Mutex<Option<std::path::PathBuf>>,
@@ -1742,6 +1744,97 @@ fn get_desktop_settings(app: AppHandle, window: WebviewWindow) -> Result<Desktop
     })
 }
 #[tauri::command]
+fn set_shortcut_recording(app: AppHandle, window: WebviewWindow, enabled: bool) -> Result<()> {
+    main_only(&window)?;
+    let context = app.state::<Context>();
+    if enabled {
+        let _operation = context
+            .operation
+            .try_lock()
+            .map_err(|_| "另一项编辑操作仍在进行")?;
+        context.ensure_not_exiting()?;
+        app.state::<Updates>().ensure_idle()?;
+        no_active_capture(&context)?;
+        if !window.is_focused().map_err(|e| e.to_string())? {
+            return Err("请先回到星镜窗口，再录入快捷键".into());
+        }
+        context.shortcut_recording.store(true, Ordering::Release);
+    } else {
+        // Blur/tab changes must be able to release recording even while another
+        // operation is busy. No global keyboard hook or old-binding removal.
+        context.shortcut_recording.store(false, Ordering::Release);
+    }
+    Ok(())
+}
+
+fn record_shortcut(app: &AppHandle, shortcut: &str) -> bool {
+    let context = app.state::<Context>();
+    if !context.shortcut_recording.load(Ordering::Acquire) {
+        return false;
+    }
+    if app
+        .get_webview_window("main")
+        .is_some_and(|window| window.is_focused().unwrap_or(false))
+    {
+        let _ = app.emit_to("main", "shortcut-recorded", shortcut);
+        true
+    } else {
+        context.shortcut_recording.store(false, Ordering::Release);
+        false
+    }
+}
+
+#[tauri::command]
+fn check_desktop_shortcuts(
+    app: AppHandle,
+    window: WebviewWindow,
+    capture_shortcut: String,
+    pin_shortcut: String,
+) -> Result<desktop_settings::ShortcutChecks> {
+    main_only(&window)?;
+    let context = app.state::<Context>();
+    let _operation = context
+        .operation
+        .try_lock()
+        .map_err(|_| "另一项编辑操作仍在进行")?;
+    context.ensure_not_exiting()?;
+    app.state::<Updates>().ensure_idle()?;
+    no_active_capture(&context)?;
+    if !lock(&context.shortcut_probes)?.is_empty() {
+        return Err("上次检测未能释放临时快捷键，请退出并重新打开星镜后重试".into());
+    }
+    Ok(desktop_settings::check_shortcuts(
+        &capture_shortcut,
+        &pin_shortcut,
+        |shortcut| {
+            if !lock(&context.shortcut_probes)?.is_empty() {
+                return Err("检测未能释放临时快捷键，请退出并重新打开星镜后重试".into());
+            }
+            desktop_settings::probe_shortcut(
+                app.global_shortcut().is_registered(shortcut),
+                |register| {
+                    if register {
+                        lock(&context.shortcut_probes)?.insert(shortcut.id());
+                        if let Err(error) = app.global_shortcut().register(shortcut) {
+                            lock(&context.shortcut_probes)?.remove(&shortcut.id());
+                            return Err(desktop_settings::registration_error(shortcut, error));
+                        }
+                    } else {
+                        // Keep the suppression marker if native cleanup fails;
+                        // a stale probe must never become a screenshot action.
+                        app.global_shortcut()
+                            .unregister(shortcut)
+                            .map_err(|e| e.to_string())?;
+                        lock(&context.shortcut_probes)?.remove(&shortcut.id());
+                    }
+                    Ok(())
+                },
+            )
+        },
+    ))
+}
+
+#[tauri::command]
 fn set_desktop_settings(
     app: AppHandle,
     window: WebviewWindow,
@@ -1756,6 +1849,9 @@ fn set_desktop_settings(
     context.ensure_not_exiting()?;
     app.state::<Updates>().ensure_idle()?;
     no_active_capture(&context)?;
+    if !lock(&context.shortcut_probes)?.is_empty() {
+        return Err("上次检测未能释放临时快捷键，请退出并重新打开星镜后重试".into());
+    }
     let directory = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let mut old = lock(&context.settings)?;
     let previous_autostart = app
@@ -1769,7 +1865,11 @@ fn set_desktop_settings(
             if register && app.global_shortcut().is_registered(shortcut) {
                 Ok(false)
             } else if register {
-                app.global_shortcut().register(shortcut).map(|_| true)
+                return app
+                    .global_shortcut()
+                    .register(shortcut)
+                    .map(|_| true)
+                    .map_err(|e| desktop_settings::registration_error(shortcut, e));
             } else if app.global_shortcut().is_registered(shortcut) {
                 app.global_shortcut().unregister(shortcut).map(|_| true)
             } else {
@@ -2316,6 +2416,9 @@ fn install_guarded_app_menu(app: &AppHandle) -> tauri::Result<()> {
     menu.insert(&application, 0)?;
     app.on_menu_event(|app, event| {
         if event.id.as_ref() == "request-app-exit" {
+            if record_shortcut(app, "Super+KeyQ") {
+                return;
+            }
             if let Err(error) = begin_exit(app) {
                 report_error(app, &error);
             }
@@ -2346,10 +2449,25 @@ pub fn run() {
                     if event.state() != ShortcutState::Pressed {
                         return;
                     }
-                    let bindings = app
-                        .state::<Context>()
+                    let context = app.state::<Context>();
+                    {
+                        let Ok(probes) = context.shortcut_probes.try_lock() else {
+                            return;
+                        };
+                        if probes.contains(&shortcut.id())
+                            || !app.global_shortcut().is_registered(*shortcut)
+                        {
+                            return;
+                        }
+                    }
+                    if record_shortcut(app, &shortcut.to_string()) {
+                        return;
+                    }
+                    // A save may hold settings while awaiting a main-thread
+                    // registration. Never make its hotkey callback wait back.
+                    let bindings = context
                         .settings
-                        .lock()
+                        .try_lock()
                         .ok()
                         .and_then(|settings| settings.shortcuts().ok());
                     if let Some([capture, pin]) = bindings {
@@ -2454,6 +2572,20 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == "main"
+                && matches!(
+                    event,
+                    tauri::WindowEvent::Focused(false)
+                        | tauri::WindowEvent::CloseRequested { .. }
+                        | tauri::WindowEvent::Destroyed
+                )
+            {
+                window
+                    .app_handle()
+                    .state::<Context>()
+                    .shortcut_recording
+                    .store(false, Ordering::Release);
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
                     api.prevent_close();
@@ -2533,6 +2665,8 @@ pub fn run() {
             read_recovery_point,
             restart_app,
             get_desktop_settings,
+            check_desktop_shortcuts,
+            set_shortcut_recording,
             set_desktop_settings,
             set_editor_state,
             request_exit,

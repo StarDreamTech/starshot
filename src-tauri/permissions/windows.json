@@ -24,6 +24,8 @@
           "read_recovery_point",
           "restart_app",
           "get_desktop_settings",
+          "check_desktop_shortcuts",
+          "set_shortcut_recording",
           "set_desktop_settings",
           "set_editor_state",
           "request_exit",

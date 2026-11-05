@@ -27,6 +27,102 @@ pub struct DesktopSettingsStatus {
     pub autostart: bool,
 }
 
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ShortcutAvailability {
+    Available,
+    Current,
+    Unavailable,
+    Invalid,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ShortcutCheck {
+    pub status: ShortcutAvailability,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ShortcutChecks {
+    pub capture: ShortcutCheck,
+    pub pin: ShortcutCheck,
+}
+
+fn parse_shortcut(value: &str, action: &str) -> Result<Shortcut> {
+    if value.len() > 100 {
+        return Err(format!("{action}快捷键过长，请重新输入"));
+    }
+    value
+        .trim()
+        .parse()
+        .map_err(|_| format!("{action}快捷键无效，请输入组合键或 F1–F24"))
+}
+
+// `current` means registered by this app, never a system-wide availability query.
+// A successful check must release its temporary registration before reporting success.
+pub fn probe_shortcut(current: bool, mut binding: impl FnMut(bool) -> Result<()>) -> Result<bool> {
+    if current {
+        return Ok(true);
+    }
+    binding(true)?;
+    binding(false).map_err(|error| {
+        format!("检测后未能释放临时快捷键，请退出并重新打开星镜后重试：{error}")
+    })?;
+    Ok(false)
+}
+
+pub fn check_shortcuts(
+    capture: &str,
+    pin: &str,
+    mut probe: impl FnMut(Shortcut) -> Result<bool>,
+) -> ShortcutChecks {
+    let capture_key = parse_shortcut(capture, "截图");
+    let pin_key = parse_shortcut(pin, "贴图");
+    let duplicate = matches!((&capture_key, &pin_key), (Ok(a), Ok(b)) if a == b);
+    let mut check = |key: Result<Shortcut>| {
+        if duplicate {
+            return ShortcutCheck {
+                status: ShortcutAvailability::Invalid,
+                message: "截图与贴图不能使用同一个快捷键".into(),
+            };
+        }
+        match key {
+            Err(message) => ShortcutCheck {
+                status: ShortcutAvailability::Invalid,
+                message,
+            },
+            Ok(key) => match probe(key) {
+                Ok(current) => ShortcutCheck {
+                    status: if current {
+                        ShortcutAvailability::Current
+                    } else {
+                        ShortcutAvailability::Available
+                    },
+                    message: if current {
+                        "星镜已注册此快捷键，可继续使用".into()
+                    } else {
+                        "当前可注册；保存时会再次检查".into()
+                    },
+                },
+                Err(message) => ShortcutCheck {
+                    status: ShortcutAvailability::Unavailable,
+                    message,
+                },
+            },
+        }
+    };
+    ShortcutChecks {
+        capture: check(capture_key),
+        pin: check(pin_key),
+    }
+}
+
+pub fn registration_error(shortcut: Shortcut, error: impl std::fmt::Display) -> String {
+    // The plugin erases the native error type; macOS also drops OSStatus. Do not
+    // invent the occupying app or report every registration failure as a conflict.
+    format!("快捷键 {shortcut} 无法注册，可能已被占用或由系统保留：{error}")
+}
+
 impl Default for DesktopSettings {
     fn default() -> Self {
         Self {
@@ -40,17 +136,8 @@ impl Default for DesktopSettings {
 
 impl DesktopSettings {
     pub fn shortcuts(&self) -> Result<[Shortcut; 2]> {
-        if self.capture_shortcut.len() > 100 || self.pin_shortcut.len() > 100 {
-            return Err("快捷键过长，请重新输入".into());
-        }
-        let capture = self
-            .capture_shortcut
-            .parse::<Shortcut>()
-            .map_err(|_| "截图快捷键无效")?;
-        let pin = self
-            .pin_shortcut
-            .parse::<Shortcut>()
-            .map_err(|_| "贴图快捷键无效")?;
+        let capture = parse_shortcut(&self.capture_shortcut, "截图")?;
+        let pin = parse_shortcut(&self.pin_shortcut, "贴图")?;
         if capture == pin {
             return Err("截图与贴图不能使用同一个快捷键".into());
         }
@@ -104,17 +191,22 @@ pub fn replace_shortcuts(
     let mut removed = Vec::new();
     let mut added = Vec::new();
     let result = (|| {
-        for shortcut in previous {
+        for (index, shortcut) in previous.into_iter().enumerate() {
             // Some platform APIs can change their bookkeeping before reporting
             // an unregister failure, so also roll back the attempted binding.
             removed.push(shortcut);
-            if !binding(shortcut, false)? {
+            if !binding(shortcut, false).map_err(|e| {
+                format!("解除{}快捷键 {shortcut} 失败：{e}", ["截图", "贴图"][index])
+            })? {
                 removed.pop();
             }
         }
-        for shortcut in replacement {
-            binding(shortcut, true)?;
-            added.push(shortcut);
+        for (index, shortcut) in replacement.into_iter().enumerate() {
+            if binding(shortcut, true).map_err(|e| {
+                format!("设置{}快捷键 {shortcut} 失败：{e}", ["截图", "贴图"][index])
+            })? {
+                added.push(shortcut);
+            }
         }
         persist()
     })();
@@ -169,6 +261,75 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
+    fn shortcut_checks_preserve_current_bindings_and_release_only_the_probe() {
+        let current: Shortcut = "Control+Shift+2".parse().unwrap();
+        let other_current: Shortcut = "Control+Shift+3".parse().unwrap();
+        let candidate: Shortcut = "Control+Shift+4".parse().unwrap();
+        let previous = HashSet::from([current.id(), other_current.id()]);
+        let mut active = previous.clone();
+        let mut operations = Vec::new();
+        let result = check_shortcuts("Control+Shift+2", "Control+Shift+4", |key| {
+            probe_shortcut(active.contains(&key.id()), |register| {
+                operations.push((key, register));
+                if register {
+                    assert!(active.insert(key.id()));
+                } else {
+                    assert!(active.remove(&key.id()));
+                }
+                Ok(())
+            })
+        });
+        assert_eq!(active, previous);
+        assert_eq!(operations, vec![(candidate, true), (candidate, false)]);
+        let json = serde_json::to_value(result).unwrap();
+        assert_eq!(json["capture"]["status"], "current");
+        assert_eq!(json["pin"]["status"], "available");
+    }
+
+    #[test]
+    fn checks_reject_equivalent_duplicates_and_keep_field_errors_separate() {
+        let duplicate = check_shortcuts("Ctrl+Shift+2", "Control+Shift+2", |_| {
+            panic!("duplicate bindings must not be registered")
+        });
+        assert_eq!(duplicate.capture.status, ShortcutAvailability::Invalid);
+        assert_eq!(duplicate.pin.status, ShortcutAvailability::Invalid);
+        let mut checked = Vec::new();
+        let result = check_shortcuts("not a shortcut", "F8", |key| {
+            checked.push(key);
+            Err(registration_error(key, "native registration failed"))
+        });
+        assert_eq!(checked, vec!["F8".parse::<Shortcut>().unwrap()]);
+        assert_eq!(result.capture.status, ShortcutAvailability::Invalid);
+        assert!(result.capture.message.contains("截图"));
+        assert_eq!(result.pin.status, ShortcutAvailability::Unavailable);
+        assert!(result.pin.message.contains("可能已被占用"));
+        assert!(result.pin.message.contains("F8"));
+    }
+
+    #[test]
+    fn failed_probes_never_unregister_an_occupied_key_or_claim_cleanup_succeeded() {
+        let mut operations = Vec::new();
+        let occupied = probe_shortcut(false, |register| {
+            operations.push(register);
+            Err("occupied".into())
+        });
+        assert_eq!(occupied.unwrap_err(), "occupied");
+        assert_eq!(operations, vec![true]);
+
+        operations.clear();
+        let cleanup_failed = probe_shortcut(false, |register| {
+            operations.push(register);
+            if register {
+                Ok(())
+            } else {
+                Err("native cleanup failed".into())
+            }
+        });
+        assert!(cleanup_failed.unwrap_err().contains("未能释放临时快捷键"));
+        assert_eq!(operations, vec![true, false]);
+    }
+
+    #[test]
     fn shortcut_changes_roll_back_registration_and_disk_failures() {
         let old = DesktopSettings::default();
         let next = DesktopSettings {
@@ -202,7 +363,11 @@ mod tests {
                 },
                 || Err("disk full".into()),
             );
-            assert!(result.is_err());
+            let error = result.unwrap_err();
+            if fail_registration {
+                assert!(error.contains("设置贴图快捷键"));
+                assert!(error.contains(&next.shortcuts().unwrap()[1].to_string()));
+            }
             assert_eq!(active, previous);
         }
         let duplicate = DesktopSettings {
@@ -212,6 +377,38 @@ mod tests {
             pin_halo: true,
         };
         assert!(duplicate.shortcuts().is_err());
+    }
+
+    #[test]
+    fn rollback_does_not_remove_a_binding_that_was_already_registered() {
+        let old = DesktopSettings::default();
+        let next = DesktopSettings {
+            capture_shortcut: "Control+Shift+4".into(),
+            pin_shortcut: "Control+Shift+5".into(),
+            ..old.clone()
+        };
+        let mut active: HashSet<_> = old
+            .shortcuts()
+            .unwrap()
+            .into_iter()
+            .map(|key| key.id())
+            .collect();
+        active.insert(next.shortcuts().unwrap()[0].id());
+        let previous = active.clone();
+        assert!(replace_shortcuts(
+            &old,
+            &next,
+            |key, register| {
+                Ok(if register {
+                    active.insert(key.id())
+                } else {
+                    active.remove(&key.id())
+                })
+            },
+            || Err("disk full".into()),
+        )
+        .is_err());
+        assert_eq!(active, previous);
     }
     #[test]
     fn failed_removal_restores_already_removed_binding_and_valid_settings_roundtrip() {
