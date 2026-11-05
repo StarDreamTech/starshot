@@ -1,5 +1,5 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
-use image::{DynamicImage, ImageFormat, ImageReader};
+use image::{DynamicImage, GenericImageView, ImageFormat, ImageReader};
 use serde::{Deserialize, Serialize};
 use std::{
     io::{Cursor, Write},
@@ -10,6 +10,29 @@ pub const MAX_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_PIXELS: u64 = 64_000_000;
 pub const MAX_CAPTURE_PIXELS: u64 = 40_000_000;
 pub const MAX_EDGE: u32 = 16_384;
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ColorFormat {
+    Hex,
+    Rgb,
+}
+
+pub fn color_at(
+    image: &DynamicImage,
+    x: u32,
+    y: u32,
+    format: ColorFormat,
+) -> Result<String, String> {
+    if x >= image.width() || y >= image.height() {
+        return Err("取色位置超出截图画面".into());
+    }
+    let [r, g, b, _] = image.get_pixel(x, y).0;
+    Ok(match format {
+        ColorFormat::Hex => format!("#{r:02X}{g:02X}{b:02X}"),
+        ColorFormat::Rgb => format!("rgb({r}, {g}, {b})"),
+    })
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 pub struct Rect {
@@ -281,6 +304,28 @@ mod tests {
                 .0,
             [22, 44, 66, 255]
         );
+    }
+    #[test]
+    fn color_sampling_uses_original_corner_pixels_and_rejects_outside_points() {
+        let frame = DynamicImage::ImageRgba8(image::RgbaImage::from_fn(3, 2, |x, y| {
+            image::Rgba([x as u8, (y * 255) as u8, 18, 255])
+        }));
+        for (x, y, expected) in [
+            (0, 0, "#000012"),
+            (2, 0, "#020012"),
+            (0, 1, "#00FF12"),
+            (2, 1, "#02FF12"),
+        ] {
+            assert_eq!(color_at(&frame, x, y, ColorFormat::Hex).unwrap(), expected);
+        }
+        assert_eq!(
+            color_at(&frame, 2, 1, ColorFormat::Rgb).unwrap(),
+            "rgb(2, 255, 18)"
+        );
+        assert!(color_at(&frame, 3, 0, ColorFormat::Hex).is_err());
+        assert!(color_at(&frame, 0, 2, ColorFormat::Hex).is_err());
+        assert!(color_at(&frame, u32::MAX, u32::MAX, ColorFormat::Hex).is_err());
+        assert!(serde_json::from_str::<ColorFormat>("\"unknown\"").is_err());
     }
     #[test]
     fn quick_capture_uses_exact_crop_or_matching_flattened_png() {

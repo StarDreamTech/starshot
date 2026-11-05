@@ -1,3 +1,5 @@
+#[cfg(any(test, all(feature = "desktop", target_os = "macos")))]
+mod capture_platform;
 #[cfg(feature = "desktop")]
 mod desktop;
 #[cfg(feature = "desktop")]
@@ -99,6 +101,7 @@ mod capability_tests {
             ("capture_overlay_ready", [false, true, false]),
             ("get_capture_element", [false, true, false]),
             ("invalidate_capture_element", [false, true, false]),
+            ("copy_capture_color", [false, true, false]),
             ("native_smoke_report", [false, true, false]),
             ("native_smoke_move", [false, true, false]),
             ("finish_capture", [false, true, false]),

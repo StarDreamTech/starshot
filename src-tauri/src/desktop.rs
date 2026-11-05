@@ -243,8 +243,28 @@ fn report_error(app: &AppHandle, error: &str) {
     show_main(app);
     let _ = app.emit_to("main", "capture-error", error);
 }
+
+#[cfg(target_os = "macos")]
+fn capture_presentation(app: &AppHandle, window: Option<WebviewWindow>) -> Result<()> {
+    let update = move || match window {
+        Some(window) => crate::capture_platform::begin(&window),
+        None => crate::capture_platform::end(),
+    };
+    if objc2::MainThreadMarker::new().is_some() {
+        return update();
+    }
+    let (sent, received) = mpsc::channel();
+    app.run_on_main_thread(move || {
+        let _ = sent.send(update());
+    })
+    .map_err(|e| e.to_string())?;
+    received.recv().map_err(|_| "无法更新截图显示状态")?
+}
+
 fn clear_capture(app: &AppHandle) -> Result<()> {
     let context = app.state::<Context>();
+    #[cfg(target_os = "macos")]
+    let restored = capture_presentation(app, None);
     lock(&context.scroll)?.take();
     let labels: Vec<String> = lock(&context.frames)?
         .drain()
@@ -258,6 +278,8 @@ fn clear_capture(app: &AppHandle) -> Result<()> {
             let _ = window.destroy();
         }
     }
+    #[cfg(target_os = "macos")]
+    restored?;
     Ok(())
 }
 
@@ -539,8 +561,18 @@ async fn capture_overlay_ready(
             );
         } else if !presented {
             // Vue has decoded the actual displayed image and committed the DOM.
-            window.show().map_err(|e| e.to_string())?;
-            window.set_focus().map_err(|e| e.to_string())?;
+            let shown = (|| -> Result<()> {
+                #[cfg(target_os = "macos")]
+                capture_presentation(&app, Some(window.clone()))?;
+                window.show().map_err(|e| e.to_string())?;
+                window.set_focus().map_err(|e| e.to_string())?;
+                Ok(())
+            })();
+            if let Err(error) = shown {
+                let _ = clear_capture(&app);
+                report_error(&app, &error);
+                return Err(error);
+            }
             if let Some(frame) = lock(&context.frames)?.get_mut(window.label()) {
                 frame.presented = true;
             }
@@ -738,6 +770,38 @@ async fn get_capture_element(
     .map_err(|_| "控件边界查询失败")?
 }
 #[tauri::command]
+async fn copy_capture_color(
+    app: AppHandle,
+    window: WebviewWindow,
+    point: crate::window_regions::ImagePoint,
+    format: imaging::ColorFormat,
+) -> Result<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let context = app.state::<Context>();
+        let _operation = lock(&context.operation)?;
+        context.ensure_not_exiting()?;
+        app.state::<Updates>().ensure_idle()?;
+        if lock(&context.scroll)?.is_some() {
+            return Err("长截图期间不可取色".into());
+        }
+        let text = {
+            let frames = lock(&context.frames)?;
+            let frame = frames
+                .get(window.label())
+                .filter(|frame| frame.presented)
+                .ok_or("截图会话尚未就绪或已结束")?;
+            imaging::color_at(&frame.image, point.x, point.y, format)?
+        };
+        arboard::Clipboard::new()
+            .and_then(|mut clipboard| clipboard.set_text(text.clone()))
+            .map_err(|e| format!("颜色复制失败：{e}"))?;
+        Ok(text)
+    })
+    .await
+    .map_err(|_| "颜色复制任务异常")?
+}
+
+#[tauri::command]
 async fn finish_capture(
     app: AppHandle,
     window: WebviewWindow,
@@ -849,6 +913,8 @@ async fn begin_scroll_capture(
         let old_size = window.inner_size().map_err(|e| e.to_string())?;
         let (x, y, width, height) = scroll_panel_bounds(scroll.monitor, rect);
         let resized = (|| -> Result<()> {
+            #[cfg(target_os = "macos")]
+            capture_presentation(&app, None)?;
             for peer in &peers {
                 peer.hide().map_err(|e| e.to_string())?;
             }
@@ -882,8 +948,12 @@ async fn begin_scroll_capture(
             let _ = window.set_size(old_size);
             let _ = window.set_title("星镜 · 选择截图区域");
             for peer in peers {
+                #[cfg(target_os = "macos")]
+                let _ = capture_presentation(&app, Some(peer.clone()));
                 let _ = peer.show();
             }
+            #[cfg(target_os = "macos")]
+            let _ = capture_presentation(&app, Some(window.clone()));
             let _ = window.show();
             let _ = window.set_focus();
             return Err(error);
@@ -1034,6 +1104,13 @@ fn complete_capture(
             window.set_always_on_top(false).map_err(|e| e.to_string())?;
             let saved = save_decoded_image(&app, &window, &image, &result.name);
             let restored = window.set_always_on_top(true).map_err(|e| e.to_string());
+            #[cfg(target_os = "macos")]
+            let restored = restored.and_then(|_| {
+                if lock(&context.scroll)?.is_none() {
+                    capture_presentation(app, Some(window.clone()))?;
+                }
+                Ok(())
+            });
             path = saved?;
             if path.is_none() {
                 restored?;
@@ -2406,6 +2483,21 @@ pub fn run() {
                     if let Ok(mut pins) = window.app_handle().state::<Context>().pins.lock() {
                         pins.remove(window.label());
                     }
+                } else if window.label().starts_with("capture-") {
+                    let app = window.app_handle().clone();
+                    let label = window.label().to_string();
+                    tauri::async_runtime::spawn_blocking(move || {
+                        let context = app.state::<Context>();
+                        if let Ok(_operation) = context.operation.lock() {
+                            if context
+                                .frames
+                                .lock()
+                                .is_ok_and(|frames| frames.contains_key(&label))
+                            {
+                                let _ = clear_capture(&app);
+                            }
+                        };
+                    });
                 }
             }
         })
@@ -2415,6 +2507,7 @@ pub fn run() {
             capture_overlay_ready,
             get_capture_element,
             invalidate_capture_element,
+            copy_capture_color,
             finish_capture,
             begin_scroll_capture,
             append_scroll_capture,
@@ -2479,6 +2572,10 @@ pub fn run() {
                 }
                 #[cfg(target_os = "macos")]
                 tauri::RunEvent::Reopen { .. } => show_main(app),
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Exit => {
+                    let _ = crate::capture_platform::end();
+                }
                 _ => {}
             }
         });
