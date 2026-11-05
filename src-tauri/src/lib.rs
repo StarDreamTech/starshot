@@ -5,6 +5,8 @@ mod desktop;
 #[cfg(feature = "desktop")]
 mod desktop_settings;
 pub mod imaging;
+#[cfg(all(feature = "desktop", target_os = "macos"))]
+mod macos_shortcuts;
 pub mod ocr;
 pub mod recovery;
 pub mod scrolling;

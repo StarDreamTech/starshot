@@ -60,6 +60,7 @@ fn parse_shortcut(value: &str, action: &str) -> Result<Shortcut> {
 
 // `current` means registered by this app, never a system-wide availability query.
 // A successful check must release its temporary registration before reporting success.
+#[cfg(any(test, not(target_os = "macos")))]
 pub fn probe_shortcut(current: bool, mut binding: impl FnMut(bool) -> Result<()>) -> Result<bool> {
     if current {
         return Ok(true);

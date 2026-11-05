@@ -1800,6 +1800,8 @@ fn check_desktop_shortcuts(
     context.ensure_not_exiting()?;
     app.state::<Updates>().ensure_idle()?;
     no_active_capture(&context)?;
+    #[cfg(target_os = "macos")]
+    crate::macos_shortcuts::ensure_clean()?;
     if !lock(&context.shortcut_probes)?.is_empty() {
         return Err("上次检测未能释放临时快捷键，请退出并重新打开星镜后重试".into());
     }
@@ -1807,29 +1809,39 @@ fn check_desktop_shortcuts(
         &capture_shortcut,
         &pin_shortcut,
         |shortcut| {
-            if !lock(&context.shortcut_probes)?.is_empty() {
-                return Err("检测未能释放临时快捷键，请退出并重新打开星镜后重试".into());
+            #[cfg(target_os = "macos")]
+            {
+                if app.global_shortcut().is_registered(shortcut) {
+                    return Ok(true);
+                }
+                return crate::macos_shortcuts::probe(&app, shortcut).map(|_| false);
             }
-            desktop_settings::probe_shortcut(
-                app.global_shortcut().is_registered(shortcut),
-                |register| {
-                    if register {
-                        lock(&context.shortcut_probes)?.insert(shortcut.id());
-                        if let Err(error) = app.global_shortcut().register(shortcut) {
+            #[cfg(not(target_os = "macos"))]
+            {
+                if !lock(&context.shortcut_probes)?.is_empty() {
+                    return Err("检测未能释放临时快捷键，请退出并重新打开星镜后重试".into());
+                }
+                desktop_settings::probe_shortcut(
+                    app.global_shortcut().is_registered(shortcut),
+                    |register| {
+                        if register {
+                            lock(&context.shortcut_probes)?.insert(shortcut.id());
+                            if let Err(error) = app.global_shortcut().register(shortcut) {
+                                lock(&context.shortcut_probes)?.remove(&shortcut.id());
+                                return Err(desktop_settings::registration_error(shortcut, error));
+                            }
+                        } else {
+                            // Keep the suppression marker if native cleanup fails;
+                            // a stale probe must never become a screenshot action.
+                            app.global_shortcut()
+                                .unregister(shortcut)
+                                .map_err(|e| e.to_string())?;
                             lock(&context.shortcut_probes)?.remove(&shortcut.id());
-                            return Err(desktop_settings::registration_error(shortcut, error));
                         }
-                    } else {
-                        // Keep the suppression marker if native cleanup fails;
-                        // a stale probe must never become a screenshot action.
-                        app.global_shortcut()
-                            .unregister(shortcut)
-                            .map_err(|e| e.to_string())?;
-                        lock(&context.shortcut_probes)?.remove(&shortcut.id());
-                    }
-                    Ok(())
-                },
-            )
+                        Ok(())
+                    },
+                )
+            }
         },
     ))
 }
@@ -1849,11 +1861,19 @@ fn set_desktop_settings(
     context.ensure_not_exiting()?;
     app.state::<Updates>().ensure_idle()?;
     no_active_capture(&context)?;
+    #[cfg(target_os = "macos")]
+    crate::macos_shortcuts::ensure_clean()?;
     if !lock(&context.shortcut_probes)?.is_empty() {
         return Err("上次检测未能释放临时快捷键，请退出并重新打开星镜后重试".into());
     }
     let directory = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let mut old = lock(&context.settings)?;
+    #[cfg(target_os = "macos")]
+    let original_bindings: Vec<_> = old
+        .shortcuts()?
+        .into_iter()
+        .filter(|shortcut| app.global_shortcut().is_registered(*shortcut))
+        .collect();
     let previous_autostart = app
         .autolaunch()
         .is_enabled()
@@ -1865,6 +1885,10 @@ fn set_desktop_settings(
             if register && app.global_shortcut().is_registered(shortcut) {
                 Ok(false)
             } else if register {
+                #[cfg(target_os = "macos")]
+                if !original_bindings.contains(&shortcut) {
+                    crate::macos_shortcuts::probe(&app, shortcut)?;
+                }
                 return app
                     .global_shortcut()
                     .register(shortcut)
