@@ -11,6 +11,7 @@
 | `src/geometry.ts` | 选区夹取、候选命中、完整包含关系的父子路径、连续方向边缘/四边支撑启发式；`capture-regions.worker.ts`一次分析受限探测图，并非系统控件树 |
 | `src/components/CaptureOverlay.vue` | 原生冻结图/明确demo分支，选择、8向调整、键盘微调、放大镜、就地标注/撤销及copy/save/pin/edit路由 |
 | `src/components/PinWindow.vue` | 原生贴图拖动、缩放队列、旋转翻转、透明度、工具条显隐、双击关闭及右键菜单；焦点光圈与实际显示图片边界 |
+| `src/components/DesktopSettings.vue` / `src/shortcuts.ts` | 桌面设置草稿、快捷键录入/可读显示/占用检测；有效绑定提示与草稿分离 |
 | `src/components/ScrollCapturePanel.vue` / `src-tauri/src/scrolling.rs` | 手动逐屏采集控制面板与纯像素纵向重叠拼接；原生采集/生命周期在desktop.rs |
 | `src-tauri/src/desktop.rs` | xcap捕获、窗口候选、多显示器覆盖层、快捷键、托盘、复制/保存/贴图和IPC |
 | `src-tauri/src/capture_platform.rs` | 仅macOS桌面编译的临时截图presentation与窗口层级/行为；主线程保存与恢复，macOS27+抑制屏幕热角 |
@@ -71,10 +72,20 @@
 - `CaptureOverlay.vue::rightClick`在有选区/拖动/标注草稿时调用`reset`，清除选区、标注、撤销重做及指针捕获后重新启动悬浮预选；无选区时才`cancel`，busy期间不响应。右键释放不提交正在进行的左键拖动。底左提示按选区/工具状态变化，提示与放大镜都不拦截鼠标，不写入导出像素。
 - ⌘/Ctrl+A将选区设为当前冻结帧全图，⌘/Ctrl+T复用贴图出口，Enter复制、⌘/Ctrl+C/S及既有Tab父子路径继续有效。未选区默认显示放大镜，已有选区时按住Alt临时显示；放大镜可见且没有拖动/标注草稿时C复制当前颜色。Shift按下记录轻按，400ms内独立松开切换HEX/RGB；移动、其他按键或指针操作会取消轻按，保留Shift手动框选、Shift+Tab与10px微调。输入框不接管这些字符键，失焦清除修饰键状态。
 - `desktop.rs::copy_capture_color`仅在capture权限开放，检查生命周期、非长截图、当前唯一窗口及`Frame.presented`；`imaging::color_at`校验原图坐标并生成大写`#RRGGBB`或`rgb(r, g, b)`，读取的是Rust冻结帧，不接受前端任意文本/图片。不重新截图、不读剪贴板，写入成功后才显示已复制；失败保留当前选区。浏览器原创示例仅复制其本地示例色值。
-- `DesktopSettings.vue::fillSnipasteShortcuts`只把F1/F3填入表单，保存沿用原生事务注册/冲突回滚，未保存草稿不改变主界面的有效快捷键提示。默认绑定和旧配置不迁移，F3仍贴最近截图原图；不新增剪贴板读取。
+- `DesktopSettings.vue::fillShortcuts(true)`只把F1/F3填入表单，保存沿用原生事务注册/冲突回滚，未保存草稿不改变主界面的有效快捷键提示。默认绑定和旧配置不迁移，F3仍贴最近截图原图；不新增剪贴板读取。
 - `capture_platform.rs`原生模块限定macOS+desktop；`begin`/`end`仅在AppKit主线程操作。首次`begin`保存NSApplication原presentation及每个NSWindow原level/collectionBehavior，多屏和保存失败后的重复begin不覆盖原值。隐藏Dock/菜单栏时清除互斥autoHide及依赖它的autoHideToolbar；macOS27+额外启用`NSApplicationPresentationDisableScreenCornerInteractions`（`1<<15`），旧系统不传新位。窗口使用Stationary、CanJoinAllSpaces、FullScreenAuxiliary与screenSaver层级，保留并最终恢复原配置；不改变系统热角偏好、写defaults或屏蔽Cmd+Tab。
 - `desktop.rs::capture_presentation`主线程直接调用，工作线程才投递并等channel；覆盖层ready显示前begin，显示失败与`clear_capture`恢复后清理。进入长截图收缩前end，收缩失败逐屏重新begin；保存取消/失败后重升选区窗口。意外Destroyed在后台取得operation锁并检查当前label后清理，旧销毁事件不能影响新会话；RunEvent::Exit额外幂等恢复。旧系统的Stationary/层级只是回退，不能写成全部热角已禁用。
 - 来源为Snipaste官方快捷键文档、Apple文档与本机SDK声明，具体链接见[交互研究](../../../../docs/screenshot-research.md)。已完成源码实现与编译检查；行为测试、平台构建与安装结果由[验证记录](../../../../docs/verification.md)分别维护，不将编译当作真实热角效果验收。
+
+## 2026-11-05设置导航与快捷键录入
+
+- `App.vue`左下角用`Icon.vue`齿轮打开设置，独立调色盘按钮打开五套预设主题选择；选择预设关闭自定义配色但保留其颜色值，界面主题与导出图片背景分离。设置分外观、快捷键、通用、更新与恢复、关于五个标签，默认快捷键；标签具有对应tabpanel、方向键/Home/End导航和单一Tab焦点入口。
+- `DesktopSettings`使用同一组件切换快捷键/通用部分，其余标签和关闭设置只隐藏组件，不销毁桌面设置草稿。`UpdateSettings`同样持续挂载监听，切标签或关闭弹窗不丢更新事件；下载、待安装、备份安装及确认状态自动打开更新与恢复页，更新忙碌时保留关闭/切标签禁用和编辑门控。
+- `shortcuts.ts::shortcutFromKey`按物理按键代码生成组合，支持修饰键、F1–F24及常用编辑/方向键，忽略输入法组合、单独修饰键与重复keydown；无修饰字母/数字/方向键不作录入，仍可文本编辑。`shortcutLabel`生成平台可读提示。点击录入先等待原生门控成功，取得组合后结束录入并检测；Esc、Tab、失焦、切标签、关闭或卸载清理，串行原生命令与请求代数处理迟到回执。
+- `desktop.rs::set_shortcut_recording`及`check_desktop_shortcuts`仅授权main；开始录入和检测沿用operation、退出、更新、活跃截图门控，结束录入不受忙碌限制。原生录入标志只在main实际聚焦时拦截已注册全局快捷键，发送`shortcut-recorded`字符串而不截图或贴图；macOS应用菜单⌘Q同样回传而不退出。主窗失焦/关闭/销毁清标志，回调也复查焦点；不添加全局键盘监听，不注销原快捷键。回调读取settings使用try_lock，避免保存持锁等待主线程注册时互锁。
+- `desktop_settings.rs::check_shortcuts`解析并规范化比较两个组合，分别返回`available/current/unavailable/invalid`与中文信息。`is_registered`只证明本应用登记，不能当全系统占用查询；已有注册直接返回current，候选实际注册并立即撤销，不保存草稿、不触发截图/贴图、不读剪贴板。Windows使用插件试注册，probe标记抑制动作；撤销成功移除登记后才释放标记，清理失败阻止后续检测/保存并提示重启。macOS普通Carbon登记允许跨进程共享：`macos_shortcuts.rs`使用主线程独占试注册，立即撤销，以独立签名和非插件ID避免临时事件误触；可识别已有独占注册的冲突，非独占共享不保证被拒绝，不能据此宣称所有占用均可检测。-9878明确报占用，其他错误保留OSStatus，清理失败同样要求重启。保存新增候选前再次独占检查，原绑定与回滚保持原登记方式；虚拟键映射仅macOS编译，不支持独占检测的媒体键等组合明确报错。失败按原事务回滚，只移除本次新增登记。
+- `DesktopSettings.vue::refresh(false)`在保存失败后只更新主界面有效快捷键提示，保留用户输入草稿；成功保存才以真实返回替换草稿。检测请求代数拒绝输入修改后的旧结果，贴图光圈事件继续只更新该字段，不覆盖快捷键草稿。初始化读取失败保留错误并禁止默认草稿写入，提供重新读取入口。OS占用可能在检测与保存间变化；current只代表星镜已登记，available只代表当前可注册，两者均不保证没有其他监听者。不能报告占用软件名称，也不保证检测全部非独占共享或系统保留快捷键；本机原创Carbon夹具的独占冲突/非独占允许结果见验证记录，不把SDK注释推断当作全平台事实。
+- 上述为源码行为；纯测试覆盖已有绑定保留、探测清理、重复/非法组合、登记/清理失败、事务回滚与权限限制。浏览器或模拟IPC不能证明真实全局热键触发、全部系统冲突与跨平台原生交互已验收；实际检查、构建和安装结果见[验证记录](../../../../docs/verification.md)。
 
 ## 2026-10-29未发布悬浮预选修复
 
