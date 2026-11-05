@@ -13,6 +13,7 @@
 | `src/components/PinWindow.vue` | 原生贴图拖动、缩放队列、旋转翻转、透明度、工具条显隐、双击关闭及右键菜单；焦点光圈与实际显示图片边界 |
 | `src/components/ScrollCapturePanel.vue` / `src-tauri/src/scrolling.rs` | 手动逐屏采集控制面板与纯像素纵向重叠拼接；原生采集/生命周期在desktop.rs |
 | `src-tauri/src/desktop.rs` | xcap捕获、窗口候选、多显示器覆盖层、快捷键、托盘、复制/保存/贴图和IPC |
+| `src-tauri/src/capture_platform.rs` | 仅macOS桌面编译的临时截图presentation与窗口层级/行为；主线程保存与恢复，macOS27+抑制屏幕热角 |
 | `src-tauri/src/window_regions.rs` / `window_regions/windows.rs` | macOS CoreGraphics几何快照与已有授权下的AX位置/尺寸；Windows窗口身份快照与受限UIA helper；初始鼠标和原生控件坐标转换 |
 | `src-tauri/src/imaging.rs` | 图片解码/上限、裁切参数、坐标转换、同目录临时文件原子替换 |
 | `src-tauri/{build.rs,permissions,capabilities}` | 主编辑器/捕获/贴图三类窗口最小权限；lib.rs测试生成后的ACL |
@@ -27,14 +28,14 @@
 - 演示SVG先栅格化PNG供区域预览，避免SVG preserveAspectRatio与选框映射不一致。demo必须显式绑定，桌面设置里的原创示例不能访问原生捕获帧。
 - 输入导入24MP/32MB，原生截图每屏40MP，渲染/原生导出64MP/64MB，最长边16384；不能在截图确认关闭覆盖层后才用更低导入阈值拒绝截图。2×应实际重新计算尺寸并预先禁用超限导出。
 - 保存先完整编码，再在目标同目录创建临时文件、fsync、原子替换；失败保留旧目标。JPEG以白底合成透明像素。取消原生对话框不提交编辑或丢失当前图。
-- macOS系统占用Cmd+Shift+3；贴原图使用 `CommandOrControl+Alt+3`，开始截图 `CommandOrControl+Shift+2`。实际冲突通过UI报错，不使启动失败。
+- macOS系统占用Cmd+Shift+3；默认贴原图使用 `CommandOrControl+Alt+3`，开始截图 `CommandOrControl+Shift+2`。2026-11-05设置页增加F1/F3预设填入，只改草稿、保存才生效，不自动覆盖既有配置。实际冲突通过UI报错并尝试恢复原绑定，回滚失败也报告实际错误，不使启动失败。
 - 新图最近会话最多6张、原图合计48MP；最多60个撤销步骤。预算不包含背景/临时渲染/快照，不代表进程硬内存上限。贴图最多12张。
 - 用户反馈菜单栏原图标难辨认（2026-10-26）。托盘不再复用带底板的应用图标：`public/tray-template.svg`生成36px黑色透明模板，macOS启用icon_as_template；`public/tray-contrast.svg`生成32px紫色/白边图标供Windows。源码接入desktop.rs，已有image依赖负责解码，无新增依赖。生成命令为 `npm run tauri -- icon public/tray-template.svg --output src-tauri/icons/tray-template --png 36`，另一份替换为tray-contrast和32。此修复自0.2.1引入；系统实机效果与设计预览分开记录。
 
 ## 轻量截图改进（0.3.1已发布）
 
 - `finish_capture`接受可选action（edit/copy/save/pin，缺省edit兼容旧调用）及仅标注时传入的PNG；原生核对活跃窗口、矩形、实际PNG格式和精确裁切尺寸。保存取消返回completed=false保留选区；失败不关闭。quick成功更新current/已有main会话但不创建或唤起main，edit才唤起。
-- 每次捕获窗口使用唯一`capture-{id}-{index}`，旧请求/关闭事件不得影响后续捕获。2026-10-29按用户反馈取消“取消截图后恢复此前可见主窗”的旧行为：叉号、Esc、右键、长截图取消及原生关闭只清截图状态，主窗保持收起，已有图片/编辑会话不变；仅主动更多编辑或截图启动失败时显示主窗。主窗原本隐藏时不等待180ms移除动画。保存/贴图使用已持有operation锁的内部helper，不能重入外层加锁命令。
+- 每次捕获窗口使用唯一`capture-{id}-{index}`，旧请求/关闭事件不得影响后续捕获。2026-10-29按用户反馈取消“取消截图后恢复此前可见主窗”的旧行为：退出截图只清截图状态，主窗保持收起，已有图片/编辑会话不变；仅主动更多编辑或截图启动失败时显示主窗。2026-11-05右键规则改为有选区先重置、无选区才退出，叉号、Esc、长截图取消及原生关闭仍可退出；旧右键直接退出的验证仅适用于此前版本。主窗原本隐藏时不等待180ms移除动画。保存/贴图使用已持有operation锁的内部helper，不能重入外层加锁命令。
 - 原生未标注选区直接裁切RGBA用于copy/save，仍编码一份PNG供最近图片和已有主窗状态；不能声称完全没有PNG编码。前端仅显示图片，不为放大镜再常驻完整CPU截图canvas；小画布每帧最多一次读色，隐藏时不读。
 - 区域候选Worker在界面可交互后分析一次，探测图长边1920、算法硬上限4MP，最多256边缘候选；不再二次480跳采样。四边支撑拒绝文字/单线/密集纹理，圆角与短断边可保留；表格相连格线、严重缺边/极低对比仍可能漏检。演示卡片候选也走真实算法。
 - 系统窗口保留系统返回的前后顺序，指针处只采用最前窗口及其内部候选，避免后台小窗抢选；全屏作为末级候选。0.3.1通过xcap获取窗口，2026-10-29未发布修复改为macOS直接取CoreGraphics几何快照。Tab按矩形坐标匹配当前候选（不能用Vue代理对象的indexOf），同位置点击/抬起保留键盘选择，真实移动后重新命中。
@@ -64,6 +65,16 @@
 - 贴图送编辑器使用单待处理请求、一次领取和导入后确认（`take_pending_pin_edit` / `finish_pin_edit`只授予main）。编码后复查忙碌，窗口创建失败真实返回；等待回执前释放operation锁，不写普通截图current。送入的是贴图扁平像素，作为新图片编辑，不重建原始标注对象。新主窗启动后领取，重复事件不重复导入；30秒到期、忙碌、解码失败或新导入取代均返回失败且保留贴图。前端在解码后提交前检查截止时间；待处理请求阻止空窗释放。
 - 主编辑器`resetStyle`一次checkpoint恢复DEFAULT_STYLE并清空本地背景，保留原图、裁剪与标注；递增backgroundVersion，迟到背景读取不能覆盖重置。顶部与帮助中的快捷键都使用实际shortcuts状态，保存失败回读原生绑定后同步提示。设置组件向主页面发出两个快捷键字符串的独立快照，不共享可变的设置对象，避免未保存输入提前改变已生效快捷键提示。
 - 浏览器回归入口：`tests/browser-capture-regression.mjs`、`tests/browser-pin-regression.mjs`，仅原创图和模拟IPC。原生双击事件、隐藏控制窗后实际采集、多DPI和Windows新构建须独立验证，不把模拟IPC算成原生通过。
+
+## 2026-11-05截图键鼠与四角保护
+
+- `CaptureOverlay.vue::rightClick`在有选区/拖动/标注草稿时调用`reset`，清除选区、标注、撤销重做及指针捕获后重新启动悬浮预选；无选区时才`cancel`，busy期间不响应。右键释放不提交正在进行的左键拖动。底左提示按选区/工具状态变化，提示与放大镜都不拦截鼠标，不写入导出像素。
+- ⌘/Ctrl+A将选区设为当前冻结帧全图，⌘/Ctrl+T复用贴图出口，Enter复制、⌘/Ctrl+C/S及既有Tab父子路径继续有效。未选区默认显示放大镜，已有选区时按住Alt临时显示；放大镜可见且没有拖动/标注草稿时C复制当前颜色。Shift按下记录轻按，400ms内独立松开切换HEX/RGB；移动、其他按键或指针操作会取消轻按，保留Shift手动框选、Shift+Tab与10px微调。输入框不接管这些字符键，失焦清除修饰键状态。
+- `desktop.rs::copy_capture_color`仅在capture权限开放，检查生命周期、非长截图、当前唯一窗口及`Frame.presented`；`imaging::color_at`校验原图坐标并生成大写`#RRGGBB`或`rgb(r, g, b)`，读取的是Rust冻结帧，不接受前端任意文本/图片。不重新截图、不读剪贴板，写入成功后才显示已复制；失败保留当前选区。浏览器原创示例仅复制其本地示例色值。
+- `DesktopSettings.vue::fillSnipasteShortcuts`只把F1/F3填入表单，保存沿用原生事务注册/冲突回滚，未保存草稿不改变主界面的有效快捷键提示。默认绑定和旧配置不迁移，F3仍贴最近截图原图；不新增剪贴板读取。
+- `capture_platform.rs`原生模块限定macOS+desktop；`begin`/`end`仅在AppKit主线程操作。首次`begin`保存NSApplication原presentation及每个NSWindow原level/collectionBehavior，多屏和保存失败后的重复begin不覆盖原值。隐藏Dock/菜单栏时清除互斥autoHide及依赖它的autoHideToolbar；macOS27+额外启用`NSApplicationPresentationDisableScreenCornerInteractions`（`1<<15`），旧系统不传新位。窗口使用Stationary、CanJoinAllSpaces、FullScreenAuxiliary与screenSaver层级，保留并最终恢复原配置；不改变系统热角偏好、写defaults或屏蔽Cmd+Tab。
+- `desktop.rs::capture_presentation`主线程直接调用，工作线程才投递并等channel；覆盖层ready显示前begin，显示失败与`clear_capture`恢复后清理。进入长截图收缩前end，收缩失败逐屏重新begin；保存取消/失败后重升选区窗口。意外Destroyed在后台取得operation锁并检查当前label后清理，旧销毁事件不能影响新会话；RunEvent::Exit额外幂等恢复。旧系统的Stationary/层级只是回退，不能写成全部热角已禁用。
+- 来源为Snipaste官方快捷键文档、Apple文档与本机SDK声明，具体链接见[交互研究](../../../../docs/screenshot-research.md)。已完成源码实现与编译检查；行为测试、平台构建与安装结果由[验证记录](../../../../docs/verification.md)分别维护，不将编译当作真实热角效果验收。
 
 ## 2026-10-29未发布悬浮预选修复
 

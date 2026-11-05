@@ -400,3 +400,17 @@ Homebrew真实安装到仓库忽略的隔离目录；brew info的安装版本、
 - 真实WKWebView载入生产dist和Worker，9/9通过、stderr为空；新用例覆盖列表项→导航面板→内容区→宿主→全屏及逆序、同框去重、两端停止、Tab冻结后迟到原生/Worker结果。首次运行受真实桌面鼠标跟踪事件干扰；夹具随后仅屏蔽可信真实输入，保留原合成事件和断言，最终通过。这仍为原创像素和模拟IPC交互验收，不是桌面捕获全流程。
 - 源码`98af08d`的正常标识macOS arm64 app构建、严格codesign通过。安装前手动备份最新会话并校验字节数/SHA、归档校验旧app，然后替换固定日用入口；新二进制SHA-256为`2e3661238b2b6784f56f6955637961db028c1390cfd0896defa0420a23ccaab1`。新旧app均已归档，临时可运行构建副本已移除。
 - 新版首次录屏预检未通过；沿用用户既有权限修复授权，只重置Starshot录屏登记。用户再次完成系统验证后，重新添加固定app的录屏及辅助功能条目；重启后原生设置两项预检均通过。已从安装前恢复点恢复图片和编辑状态，界面成功提示与活动图片元数据相符，并将工作台留给用户。仍为未公开发行的本地0.3.1，没有新tag、Release或Homebrew变更，未捕获真实桌面。
+
+
+## 2026-11-05 · 截图键鼠、取色提示与四角保护
+
+- 按用户Snipaste参考补齐右键两阶段：先清除选区/本次标注并继续截图，无选区再右键退出；输入繁忙时拒绝，右键取消释放指针捕获，迟到pointerup不复活旧手势。底左提示不拦截指针，C复制冻结原图色值，轻按Shift切格式、选区内Alt临时显示放大镜，⌘/Ctrl+A全屏、⌘/Ctrl+T贴图；设置可填入F1/F3，保存才生效，不迁移旧配置。官方来源和采用范围见[交互研究](screenshot-research.md)。
+- macOS原生模块仅目标平台编译，覆盖层ready显示前保存presentation与窗口状态，27+启用公开disableScreenCornerInteractions，配合隐藏Dock/菜单栏和Stationary高层窗口；清理、失败、长截图收缩、销毁及退出恢复。旧系统仅作窗口行为回退，不保证禁用所有热角；未改系统热角设置。取色IPC仅capture授权，核对活动且已显示的帧及有效坐标后写剪贴板；不读剪贴板或重新采集。
+- 本机Node60项为59通过/1项minisign缺失跳过；Rust core42/desktop58、cargo check/fmt和前端构建通过。新增纯测试覆盖四角原像素、RGB/HEX格式与越界，以及多屏presentation首次状态保留、完整恢复、幂等结束和旧系统位屏蔽。
+- 真实WKWebView载入生产dist与Worker，11/11通过、stderr为空；新增两综合用例覆盖四角框选、提示穿透、右键重选/退出及取消草稿、颜色请求快照/失败重试/忙时去重、Shift组合、Alt与全屏/贴图。首次发现工具条自动宽度随left改变导致ResizeObserver布局循环；改为固有宽度并只写变化尺寸，保留原错误断言后通过。末次仅调整放大镜CSS为content-box与两行提示，前端构建通过，Chromium视觉检查确认画布在框内、右下角提示不出视口。
+- Ego Chromium既有截图9组通过，含实际原创PNG导出像素、就地标注、Tab路径和长截图模拟生命周期；取色/截图原生IPC均用模拟，未触碰真实剪贴板。以上覆盖前端交互与纯原生状态，不等同实际系统热角、全局F1/F3或真实桌面截图全流程验收。本轮没有要求用户继续转发Windows测试，也没有在本机执行Windows原生矩阵。
+- 源码分批提交：`e62c676`原生热角保护及取色接口，`07892e8`前端操作/提示与WebKit验收；完整源码保留，日志和原创测试图仅存Git忽略的`artifacts/capture-polish-20261105/`。安装与平台构建结果见下。
+- 首次正常平台打包及清理本项目release缓存后的构建均出现E0463。直接dlopen旧phf_macros/zerofrom_derive确认系统拒绝`mis-aligned LINKEDIT string pool`，关闭strip后新宏库加载成功，与[Rust上游问题](https://github.com/rust-lang/rust/issues/157750)一致。按[Cargo官方build-override](https://doc.rust-lang.org/cargo/reference/profiles.html#overrides)仅对构建期依赖设置strip=none（提交`1cd1589`），最终成品仍strip=true；未清理任何其他项目或个人文件。
+- 持久build-override修复后的正常`npm run tauri -- build --bundles app`成功，macOS arm64 app为11.26MiB，严格codesign通过（仍ad-hoc、未公证）。安装源码`1cd1589`，固定入口二进制SHA-256 `064db91b0158ae8e5ae1b271a244e9783173d6532a33a1098d128be5760f1e10`；归档校验后移除本轮构建app副本。安装前UI会话为空，仍手动备份并验证清单字节数/SHA，旧app归档内二进制一致后才退出替换；不自动载入旧图片恢复点。
+- 新进程显示F1/F3预设入口；录屏与辅助功能预检均未通过。仅为Starshot重置ScreenCapture并到系统设置重新添加固定路径，系统要求触控ID/密码验证；当前等待用户完成，权限修复尚未完成。没有捕获真实桌面，不能宣称四角系统热角已原生实测。
+- `1cd1589`的[verify运行41991199652](https://github.com/cpython666/starshot/actions/runs/41991199652)在本轮记录时仍进行中：macOS单元/desktop测试通过、app/DMG构建中；Windows核心测试通过、desktop测试中；release-safety通过。此为阶段状态，不写成双平台安装包构建已通过。

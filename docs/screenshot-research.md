@@ -20,9 +20,24 @@ Snipaste 文档还区分关闭单张、隐藏全部和销毁；这说明动作�
 1. **长截图**：从选区工具条进入；显示拼接预览、累计尺寸、完成与取消。先支持用户手动滚动后明确采集下一屏，采集时隐藏控制窗口；重叠不足、重复帧、反向滚动、尺寸变化和资源上限均给出可恢复的反馈。本轮源码包含简单固定头尾处理及原创像素测试；自动滚动、复杂固定页眉与动态页面支持不能由首版拼接推定已具备。
 2. **贴图**：按用户要求改为双击关闭，右键集中现有动作；空格仍能控制工具条。原生拖动可能吞掉 DOM 双击，须额外核对实际按下序列，并测试右键菜单键盘导航、边缘不出屏和误拖动。
 3. **辅助线**：指针位置显示一横一竖细线，选区确定后降低干扰，提供快捷键显隐；线、放大镜、尺寸提示只属于覆盖层，不能进入导出像素。这是星镜本轮设计选择，不声称复刻某竞品的具体算法。
-4. **后续候选**：独立全文 OCR 复制、显式复制色值可复用现有本地 OCR/读色路径；翻译需要另行产品决策。截图流畅、错误恢复、双平台 DPI 与窗口交互验收优先于继续堆工具。
+4. **后续候选**：独立全文 OCR 复制可复用现有本地 OCR 路径；翻译需要另行产品决策。显式复制色值已于2026-11-05补入工作区，见下节。截图流畅、错误恢复、双平台 DPI 与窗口交互验收优先于继续堆工具。
 
 QQ 的教程明确针对旧版本，不能据此声称当前 QQ NT/macOS 的具体按钮、快捷键或长截图行为已原生验证。微信 Windows 官方主页在本次访问显示 4.2.0，并链接 2026-10-27 更新说明；该说明仅写修复已知问题，无法补足上述截图功能的平台/版本矩阵。来源：[微信 Windows 官方主页](https://pc.weixin.qq.com/)、[4.2.0 更新说明](https://weixin.qq.com/updates?platform=windows&version=4.2.0)。
+
+## 快捷键、提示与屏幕四角补充（2026-11-05）
+
+用户提供的Snipaste截图显示底左操作提示与鼠标旁取色提示。另核对[官方快捷键文档](https://docs.snipaste.com/zh-cn/key-bindings)及其[Markdown正文](https://docs.snipaste.com/wiki/Key-Bindings.md)：截图中右键可重选或退出，Ctrl+A选全屏、Ctrl+T贴图；放大镜可见时C复制颜色、Shift切换格式，Alt临时显示放大镜。文档注明macOS使用Cmd替代Ctrl。[基础操作](https://docs.snipaste.com/zh-cn/getting-started)及其[Markdown正文](https://docs.snipaste.com/wiki/Getting-Started.md)说明默认F1截图、F3贴图。这些是公开交互约定，未据此推定竞品内部事件实现或热角处理方法。
+
+星镜工作区采用以下规则，保留自身Tab逐级扩大和方向键调整设计，不宣称快捷键全面等同竞品：
+
+- 已有选区或正在框选时，右键清除本次选区、标注及撤销历史，仍停留截图覆盖层；无选区时右键退出。底左提示随状态变化且`pointer-events:none`，提示区域仍可开始框选。
+- ⌘/Ctrl+A选当前显示器全图，⌘/Ctrl+T贴图；放大镜可见时C复制颜色，轻按Shift切换HEX/RGB，选区确定后按住Alt临时显示。Shift拖动、Tab或其他组合键不额外切换色值格式。鼠标旁显示像素坐标、取色提示与复制结果。
+- `copy_capture_color`仅授予capture窗口，核对活跃且已显示的会话、点位与格式，从Rust保留的冻结原图读取对应像素后写剪贴板；不读取剪贴板、不重新截图，不使用覆盖层装饰或标注后的颜色。
+- 设置页提供F1/F3预设填入按钮，只修改表单草稿；点击保存才注册并持久化，失败尝试回滚原绑定并报告错误。既有默认值和用户设置不自动迁移；F3仍是星镜的「贴最近截图原图」，不新增从剪贴板读图。
+
+macOS四角干扰通过原生公开API处理：Apple的[disableScreenCornerInteractions](https://developer.apple.com/documentation/appkit/nsapplication/presentationoptions-swift.struct/disablescreencornerinteractions)及本机SDK `NSApplication.h`将该选项标为macOS27.0起可用，需同时使用隐藏或自动隐藏Dock选项。`capture_platform.rs`仅在macOS桌面构建编译，截图覆盖层显示前保存原presentation选项与窗口状态，再设置隐藏Dock/菜单栏、Stationary、较高窗口层级；27+额外禁用屏幕角交互。多屏共用一次原始状态，普通截图结束/失败、进入长截图、意外销毁及退出均恢复，长截图启动失败则重新保护覆盖层。原生调用限主线程，不写`defaults`、不更改用户热角设置或禁用Cmd+Tab。旧macOS只有层级与Stationary回退，不能保证所有热角都被抑制。选项约束另见[Apple presentationOptions](https://developer.apple.com/documentation/appkit/nsapplication/presentationoptions-swift.property)。
+
+本节记录已实现源码和已通过的编译检查；本轮行为测试、原生四角效果及安装结果另见[验证记录](verification.md)，不在研究结论中提前视为通过。未为核实此功能自动捕获真实桌面。
 
 ## REA skill 安装记录与使用边界
 
