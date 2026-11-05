@@ -62,3 +62,8 @@ incremental = false
 strip = true
 lto = "thin"
 codegen-units = 1
+
+# macOS 27 strip can misalign proc-macro dylibs; keep build tools loadable.
+# Runtime artifacts still use the release stripping setting above.
+[profile.release.build-override]
+strip = "none"
