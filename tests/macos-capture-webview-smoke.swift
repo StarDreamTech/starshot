@@ -11,7 +11,7 @@ import WebKit
 
 final class CaptureSmoke: NSObject, NSApplicationDelegate, WKURLSchemeHandler, WKScriptMessageHandler, WKNavigationDelegate {
     let root: URL
-    let cases = ["startup-gate", "startup-failure", "module-worker", "worker-constructor-fallback", "worker-runtime-fallback", "native-element", "native-panel-path", "native-stale-tab", "worker-stale-tab"]
+    let cases = ["startup-gate", "startup-failure", "module-worker", "worker-constructor-fallback", "worker-runtime-fallback", "native-element", "native-panel-path", "native-stale-tab", "worker-stale-tab", "interaction-reselect", "interaction-shortcuts"]
     var caseIndex = 0
     var view: WKWebView?
     var window: NSWindow?
@@ -68,6 +68,8 @@ final class CaptureSmoke: NSObject, NSApplicationDelegate, WKURLSchemeHandler, W
             }, {capture:true,passive:false});
           }
           const scenario = \(scenario), state = { workerPosted: false, workerReply: false, fallback: false, requests: 0, resolved: 0, cycled: false, cycleAt: 0, pathStep: 0, errors: [], readyCalls: 0, readyError: '', readyCompleted: false, domDecoded: false, workers: 0, decodeGateChecked: false, acknowledgementGateChecked: false };
+          const interaction = scenario.startsWith('interaction-');
+          Object.assign(state, {cancelCalls:0,colorCalls:[],finishCalls:[],interactionStarted:false,phase:''});
           const panelPath = [
             {x:160,y:180,width:80,height:30,label:'模拟列表项'},
             {x:80,y:100,width:300,height:500,label:'导航面板'},
@@ -100,6 +102,7 @@ final class CaptureSmoke: NSObject, NSApplicationDelegate, WKURLSchemeHandler, W
               ctx.fillStyle = '#2c3448';
               if (scenario === 'native-panel-path') ctx.fillRect(70,90,320,520);
               else ctx.fillRect(120,140,240,160);
+              if (interaction) state.fixtureCanvas = canvas;
               return {dataUrl:canvas.toDataURL('image/png'),width:1200,height:750,scaleFactor:1,pointer:{x:200,y:200},elementDetection:scenario.startsWith('native-')||scenario.startsWith('startup-'),regions:[{x:40,y:40,width:1000,height:650,label:'模拟窗口'}]};
             }
             if (command === 'capture_overlay_ready') {
@@ -115,6 +118,23 @@ final class CaptureSmoke: NSObject, NSApplicationDelegate, WKURLSchemeHandler, W
               state.readyCompleted = true; return;
             }
             if (command === 'invalidate_capture_element') return;
+            if (interaction && command === 'cancel_capture') { state.cancelCalls++; return; }
+            if (interaction && command === 'copy_capture_color') {
+              const {point,format} = args;
+              if (!Number.isInteger(point?.x) || !Number.isInteger(point?.y) || point.x < 0 || point.y < 0 || point.x >= 1200 || point.y >= 750 || !['hex','rgb'].includes(format)) throw Error('fixture: invalid color sample');
+              // Sample the original fixture, never the magnifier or real clipboard.
+              const rgb = [...state.fixtureCanvas.getContext('2d').getImageData(point.x,point.y,1,1).data].slice(0,3);
+              const value = format === 'hex' ? '#'+rgb.map(v=>v.toString(16).padStart(2,'0')).join('').toUpperCase() : 'rgb('+rgb.join(', ')+')';
+              state.colorCalls.push({point:{...point},format,value});
+              if (state.failColor) { state.failColor = false; throw Error('fixture: stale capture'); }
+              if (state.holdColor) await new Promise(resolve => { state.releaseColor = resolve; });
+              return value;
+            }
+            if (interaction && command === 'finish_capture') {
+              state.finishCalls.push(args);
+              if (state.holdFinish) await new Promise(resolve => { state.releaseFinish = resolve; });
+              return {completed:false};
+            }
             if (command === 'get_capture_element') {
               if (!state.readyCompleted) state.errors.push('native query ran before presentation acknowledgement');
               state.requests++;
@@ -148,6 +168,116 @@ final class CaptureSmoke: NSObject, NSApplicationDelegate, WKURLSchemeHandler, W
               terminate() { this.worker.terminate(); }
             };
           }
+          async function checkInteractions(stage) {
+            const assert = (condition,message) => { if (!condition) throw Error(state.phase+': '+message); };
+            const tick = () => new Promise(resolve => requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+            const selected = () => document.querySelector('.capture-selection.is-selected');
+            const visible = selector => { const node = document.querySelector(selector); return !!node && getComputedStyle(node).display !== 'none'; };
+            const text = selector => document.querySelector(selector)?.textContent?.trim() || '';
+            const key = (key,options={},type='keydown') => window.dispatchEvent(new KeyboardEvent(type,{key,bubbles:true,cancelable:true,...options}));
+            const shift = async () => { key('Shift'); key('Shift',{},'keyup'); await tick(); };
+            // Synthetic pointer IDs cannot acquire OS pointer capture. Model only
+            // that DOM contract; trusted desktop input remains blocked above.
+            const captured = new Set();
+            stage.setPointerCapture = id => captured.add(id);
+            stage.hasPointerCapture = id => captured.has(id);
+            stage.releasePointerCapture = id => captured.delete(id);
+            const pointer = (type,x,y,options={}) => stage.dispatchEvent(new PointerEvent(type,{
+              pointerId:21,pointerType:'mouse',isPrimary:true,bubbles:true,cancelable:true,button:0,
+              buttons:type === 'pointerup' ? 0 : 1,
+              clientX:x === 0 ? 0 : x === 1199 ? innerWidth-0.01 : (x+0.1)/1200*innerWidth,
+              clientY:y === 0 ? 0 : y === 749 ? innerHeight-0.01 : (y+0.1)/750*innerHeight,...options
+            }));
+            const right = async () => { stage.dispatchEvent(new MouseEvent('contextmenu',{button:2,bubbles:true,cancelable:true})); await tick(); };
+            const drag = async (x,y,endX,endY) => { pointer('pointerdown',x,y); pointer('pointermove',endX,endY); await tick(); pointer('pointerup',endX,endY); await tick(); };
+            const rect = () => {
+              const style = selected()?.style;
+              return style && {x:Math.round(parseFloat(style.left)*12),y:Math.round(parseFloat(style.top)*7.5),width:Math.round(parseFloat(style.width)*12),height:Math.round(parseFloat(style.height)*7.5)};
+            };
+            const originalImage = document.querySelector('.capture-source').src;
+            state.phase = 'hints';
+            const hint = document.querySelector('.capture-hint'), bounds = hint?.getBoundingClientRect();
+            assert(hint && getComputedStyle(hint).pointerEvents === 'none','hint blocks pointer input');
+            assert(bounds.left < 30 && innerHeight-bounds.bottom < 30,'hint is not at lower left');
+            assert(hint.textContent.includes('右键') && hint.textContent.includes('Tab'),'selection hints missing');
+            assert(text('.capture-magnifier').includes('复制颜色') && text('.capture-magnifier').includes('RGB/HEX'),'color hints missing');
+            if (scenario === 'interaction-reselect') {
+              state.phase = 'four corners';
+              for (const [x,y,dx,dy] of [[0,0,40,40],[1199,0,-40,40],[0,749,40,-40],[1199,749,-40,-40]]) {
+                await drag(x,y,x+dx,y+dy);
+                const r = rect();
+                assert(r && r.x === Math.min(x,x+dx) && r.y === Math.min(y,y+dy) && r.width === 41 && r.height === 41,'corner drag lost edge pixels');
+                assert(!captured.size,'completed drag leaked pointer capture');
+                await right();
+                assert(!selected() && state.cancelCalls === 0,'right click ended capture instead of reselecting');
+                assert(document.querySelector('.capture-source').src === originalImage,'reselection replaced frozen frame');
+              }
+              state.phase = 'cancel drag';
+              pointer('pointerdown',100,100); pointer('pointermove',300,300); await tick();
+              assert(selected() && captured.size === 1,'drag was not started');
+              pointer('pointerup',300,300,{button:2,buttons:1});
+              assert(captured.size === 1,'right release finished left drag');
+              await right(); pointer('pointerup',300,300); await tick();
+              assert(!selected() && !captured.size && !state.cancelCalls,'cancelled drag was resurrected by pointerup');
+              state.phase = 'cancel annotation';
+              await drag(100,100,500,500);
+              document.querySelector('button[aria-label="矩形"]').click(); await tick();
+              pointer('pointerdown',200,200); pointer('pointermove',300,300); await tick();
+              assert(visible('.capture-edit-preview') && captured.size === 1,'annotation draft was not started');
+              pointer('pointerup',300,300,{button:2,buttons:1});
+              assert(captured.size === 1,'right release committed annotation draft');
+              await right(); pointer('pointerup',300,300); await tick();
+              assert(!selected() && !visible('.capture-edit-preview') && !captured.size && !state.cancelCalls,'cancelled annotation survived pointerup');
+              await drag(100,100,500,500);
+              assert(document.querySelector('button[aria-label="撤销"]').disabled,'cancelled draft entered undo history');
+              state.phase = 'exit after reselect';
+              await right(); assert(!selected() && !state.cancelCalls,'first right click did not reselect');
+              await right(); assert(state.cancelCalls === 1,'second right click did not cancel exactly once');
+            } else {
+              state.phase = 'color failure and retry';
+              assert(visible('.capture-magnifier') && text('.capture-color-value') === '#2C3448','initial color does not match original pixels');
+              state.failColor = true; key('c'); await tick();
+              assert(state.colorCalls.length === 1 && text('.capture-color-status').includes('fixture: stale capture'),'color error was not reported');
+              assert(visible('.capture-magnifier') && !document.querySelector('[role=alert]') && !selected(),'failed color copy discarded capture UI');
+              state.holdColor = true; key('c'); key('c'); key('c',{repeat:true}); await tick();
+              assert(state.colorCalls.length === 2 && text('.capture-color-status').includes('正在复制'),'busy color copy was duplicated');
+              state.phase = 'in-flight color snapshot';
+              await shift(); pointer('pointermove',500,400,{buttons:0}); await tick();
+              assert(text('.capture-color-value') === 'rgb(255, 255, 255)','Shift or pointer color update failed');
+              state.holdColor = false; state.releaseColor(); await tick();
+              const old = state.colorCalls[1];
+              assert(old.point.x === 200 && old.point.y === 200 && old.format === 'hex' && old.value === '#2C3448','in-flight copy changed sampling point or format');
+              assert(text('.capture-color-status').includes('#2C3448') && text('.capture-color-value') === 'rgb(255, 255, 255)','copy reply overwrote live color');
+              key('c'); await tick();
+              assert(state.colorCalls.length === 3 && state.colorCalls[2].format === 'rgb' && text('.capture-color-status').includes('rgb(255, 255, 255)'),'retry did not copy current RGB pixel');
+              state.phase = 'Shift combination';
+              key('Shift'); key('Tab',{shiftKey:true}); key('Shift',{},'keyup'); await tick();
+              assert(text('.capture-color-value') === 'rgb(255, 255, 255)','Shift+Tab toggled color format');
+              key('Shift'); pointer('pointermove',200,200,{buttons:0,shiftKey:true}); await tick(); key('Shift',{},'keyup'); await tick();
+              assert(text('.capture-color-value') === 'rgb(44, 52, 72)','Shift plus movement toggled format');
+              state.phase = 'fullscreen and Alt';
+              key('a',{ctrlKey:true}); await tick();
+              assert(JSON.stringify(rect()) === JSON.stringify({x:0,y:0,width:1200,height:750}),'Ctrl+A did not select full frame');
+              assert(!visible('.capture-magnifier'),'selected magnifier should be hidden');
+              key('c'); await tick(); assert(state.colorCalls.length === 3,'hidden magnifier copied color');
+              key('Alt'); await tick(); assert(visible('.capture-magnifier'),'Alt did not show magnifier');
+              await shift(); key('c'); await tick();
+              assert(state.colorCalls.length === 4 && state.colorCalls[3].value === '#2C3448' && text('.capture-color-value') === '#2C3448','Alt color copy or HEX toggle failed');
+              key('Alt',{},'keyup'); await tick(); assert(!visible('.capture-magnifier'),'Alt release did not hide magnifier');
+              state.phase = 'pin and busy recovery';
+              key('a',{metaKey:true}); await tick();
+              state.holdFinish = true; key('t',{metaKey:true}); await tick();
+              assert(state.finishCalls.length === 1 && state.finishCalls[0].action === 'pin' && JSON.stringify(state.finishCalls[0].rect) === JSON.stringify({x:0,y:0,width:1200,height:750}),'Cmd+A / Cmd+T did not pin full frame');
+              key('t',{ctrlKey:true}); key('c'); await right();
+              assert(state.finishCalls.length === 1 && state.colorCalls.length === 4 && !state.cancelCalls && selected(),'busy actions changed selection or duplicated IPC');
+              state.holdFinish = false; state.releaseFinish(); await tick();
+              assert(selected() && !document.querySelector('[role=alert]') && !document.querySelector('button[aria-label="贴到桌面"]').disabled,'cancelled completion did not preserve retryable UI');
+              key('t',{ctrlKey:true}); await tick();
+              assert(state.finishCalls.length === 2 && state.finishCalls[1].action === 'pin','Ctrl+T retry failed');
+            }
+            assert(!state.errors.length,'unexpected runtime errors');
+            state.interactionResult = {result:'pass',phase:state.phase,cancelCalls:state.cancelCalls,colorCopies:state.colorCalls.length,pinRequests:state.finishCalls.length};
+          }
           window.__captureSmoke = { sample() {
             const stage = document.querySelector('.capture-stage');
             const dimensions = document.querySelector('.capture-dimensions strong')?.textContent?.trim() || '';
@@ -162,6 +292,13 @@ final class CaptureSmoke: NSObject, NSApplicationDelegate, WKURLSchemeHandler, W
             }
             if (state.errors.length || error) return {...snapshot,result:'fail',reason:state.errors.join('; ')||error};
             if (!stage) return snapshot;
+            if (interaction) {
+              if (!state.interactionStarted && state.readyCompleted && dimensions === '240 × 160') {
+                state.interactionStarted = true;
+                checkInteractions(stage).catch(cause => { state.interactionResult = {result:'fail',reason:String(cause),phase:state.phase}; });
+              }
+              return {...snapshot,phase:state.phase,...state.interactionResult};
+            }
             if (scenario === 'native-panel-path') {
               if (!state.resolved) return snapshot;
               const path = [

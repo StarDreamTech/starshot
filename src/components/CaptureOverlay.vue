@@ -16,6 +16,7 @@ type ScrollProgress = { width: number; height: number; frames: number; previewDa
 const emit = defineEmits<{ captured: [image: { dataUrl: string; width: number; height: number; name: string }]; cancel: [] }>()
 const props = withDefaults(defineProps<{ demo?: boolean }>(), { demo: false })
 const desktop = !props.demo && '__TAURI_INTERNALS__' in window
+const commandKey = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl'
 const stage = ref<HTMLElement>()
 const captureImage = ref<HTMLImageElement>()
 const magnifier = ref<HTMLCanvasElement>()
@@ -35,11 +36,15 @@ const ready = ref(false)
 const error = ref('')
 const status = ref('')
 const pixelColor = ref('#000000')
+const colorFormat = ref<'hex' | 'rgb'>('hex')
+const colorStatus = ref('')
+const colorCopying = ref(false)
 const hideMagnifier = ref(false)
 const guidesVisible = ref(true)
 const scrolling = ref(false)
 const scrollProgress = shallowRef<ScrollProgress>()
 const shiftHeld = ref(false)
+const altHeld = ref(false)
 const activeHandle = ref<Handle | 'move' | 'new'>('new')
 const dragOrigin = ref({ x: 0, y: 0 })
 const tool = ref('cursor')
@@ -78,6 +83,9 @@ let keyboardChoices: Region[] = []
 let beforeShift: Region | undefined
 let pendingMove: PointerEvent | undefined
 let annotationOrigin: { x: number; y: number } | undefined
+let capturedPointer: number | undefined
+let shiftTap = false
+let shiftStartedAt = 0
 let pointerStart = { x: 0, y: 0 }
 let regionWorker: Worker | undefined
 let toolbarObserver: ResizeObserver | undefined
@@ -100,9 +108,10 @@ const toolbarStyle = computed(() => {
 })
 const magnifierStyle = computed(() => ({
   left: `${Math.max(8, Math.min(pointer.value.clientX + 26, viewport.value.width - 174))}px`,
-  top: `${Math.max(8, Math.min(pointer.value.clientY + 26, viewport.value.height - 166))}px`,
+  top: `${Math.max(8, Math.min(pointer.value.clientY + 26, viewport.value.height - 210))}px`,
 }))
-const showMagnifier = computed(() => ready.value && !hideMagnifier.value && !busy.value && !error.value && (!selected.value || dragging.value))
+const showMagnifier = computed(() => ready.value && !hideMagnifier.value && !busy.value && !error.value && (!selected.value || dragging.value || altHeld.value))
+const pixelText = computed(() => colorFormat.value === 'hex' ? pixelColor.value : `rgb(${[1, 3, 5].map(at => parseInt(pixelColor.value.slice(at, at + 2), 16)).join(', ')})`)
 const showGuides = computed(() => ready.value && guidesVisible.value && !hideMagnifier.value && !busy.value && tool.value === 'cursor' && (!selected.value || dragging.value))
 const canStartScroll = computed(() => desktop && validSelection.value && currentRect.value!.width >= 64 && currentRect.value!.height >= 64 && !annotations.value.length)
 const scrollHint = computed(() => !desktop ? '滚动长截图仅桌面版可用' : annotations.value.length ? '先撤销标注再开始长截图，完成后可继续编辑' : !canStartScroll.value ? '长截图选区至少 64 × 64 像素' : '滚动长截图：手动滚动，逐屏采集并拼接')
@@ -163,6 +172,24 @@ function updateMagnifier() {
   pixelColor.value = '#' + [rgba[0]!, rgba[1]!, rgba[2]!].map(v => v.toString(16).padStart(2, '0')).join('').toUpperCase()
   ctx.strokeStyle = '#e9ffb3'; ctx.lineWidth = 1; ctx.strokeRect(70.5, 50.5, 9, 9)
 }
+async function copyColor() {
+  flushMove()
+  if (!showMagnifier.value || !source || colorCopying.value || dragging.value || annotationOrigin) return
+  updateMagnifier()
+  const point = { x: pointer.value.x, y: pointer.value.y }, format = colorFormat.value
+  colorCopying.value = true; colorStatus.value = ''
+  try {
+    let copied: string
+    if (desktop) copied = await invoke<string>('copy_capture_color', { point, format })
+    else {
+      if (!navigator.clipboard?.writeText) throw new Error('此浏览器不支持复制颜色')
+      copied = pixelText.value
+      await navigator.clipboard.writeText(copied)
+    }
+    if (mounted) colorStatus.value = `已复制 ${copied}`
+  } catch (cause) { if (mounted) colorStatus.value = `复制失败：${String(cause)}` }
+  finally { colorCopying.value = false }
+}
 function checkpoint() {
   undoStack.push(annotations.value); if (undoStack.length > 60) undoStack.shift()
   redoStack.length = 0; historyRevision.value++
@@ -197,6 +224,7 @@ function drawPreview() {
 function applyMove(event: PointerEvent) {
   if (!ready.value || !frame.value || busy.value || scrolling.value) return
   const p = point(event)
+  if (p.x !== pointer.value.x || p.y !== pointer.value.y) { shiftTap = false; colorStatus.value = '' }
   const moved = !pointerInside || p.x !== pointer.value.x || p.y !== pointer.value.y || event.shiftKey !== shiftHeld.value
   pointerInside = true
   if (moved) { keyboardCandidate = false; keyboardChoices = []; beforeShift = undefined }
@@ -239,6 +267,7 @@ function leave() {
   // A queued move from the old monitor must not restart its cancelled query.
   cancelAnimationFrame(moveRequest); moveRequest = 0; pendingMove = undefined
   pointerInside = false
+  shiftTap = false
   stopElementQuery()
 }
 function flushMove(event?: PointerEvent) {
@@ -248,6 +277,7 @@ function flushMove(event?: PointerEvent) {
 }
 function begin(event: PointerEvent, handle: Handle | 'move' | 'new' = 'new') {
   if (!ready.value || busy.value || event.button !== 0) return
+  shiftTap = false
   flushMove(event)
   stopElementQuery()
   const p = point(event)
@@ -259,15 +289,17 @@ function begin(event: PointerEvent, handle: Handle | 'move' | 'new' = 'new') {
       if (!text.value.trim()) { status.value = '先输入文字，再点击选区放置。'; return }
       item.text = text.value.slice(0, 1_000); checkpoint(); annotations.value = [...annotations.value, item]
     } else { annotationOrigin = p; draft.value = item }
-    stage.value?.setPointerCapture(event.pointerId); event.preventDefault(); return
+    capturedPointer = event.pointerId; stage.value?.setPointerCapture(event.pointerId); event.preventDefault(); return
   }
   // Clicking outside an established selection must not discard annotations.
   if (selected.value && handle === 'new') return
   dragging.value = true; dragOrigin.value = p; pointerStart = { x: event.clientX, y: event.clientY }
   activeHandle.value = handle; originalRect = selected.value ? { ...selected.value } : undefined
-  stage.value?.setPointerCapture(event.pointerId); event.preventDefault()
+  capturedPointer = event.pointerId; stage.value?.setPointerCapture(event.pointerId); event.preventDefault()
 }
 function end(event: PointerEvent) {
+  // A right-button release must not finish the left-button gesture first.
+  if (event.button !== 0 || (!dragging.value && !annotationOrigin)) return
   flushMove(event)
   if (annotationOrigin && draft.value) {
     const item = draft.value
@@ -279,19 +311,31 @@ function end(event: PointerEvent) {
     if (hovered.value && !event.shiftKey) selected.value = bounded(hovered.value)
   }
   dragging.value = false
-  if (stage.value?.hasPointerCapture(event.pointerId)) stage.value.releasePointerCapture(event.pointerId)
+  releasePointer()
+}
+function releasePointer() {
+  const id = capturedPointer; capturedPointer = undefined
+  if (id !== undefined && stage.value?.hasPointerCapture(id)) stage.value.releasePointerCapture(id)
 }
 function abortPointer() {
   cancelAnimationFrame(moveRequest); moveRequest = 0; pendingMove = undefined
   annotationOrigin = undefined; draft.value = undefined
   if (dragging.value && originalRect) selected.value = originalRect
   dragging.value = false
+  releasePointer()
 }
 function reset() {
   if (busy.value || scrolling.value) return
   abortPointer(); selected.value = undefined; annotations.value = []; undoStack.length = 0; redoStack.length = 0; historyRevision.value++
-  tool.value = 'cursor'; error.value = ''; status.value = ''; keyboardCandidate = false; keyboardChoices = []; beforeShift = undefined
+  tool.value = 'cursor'; error.value = ''; status.value = ''; colorStatus.value = ''; hideMagnifier.value = false
+  keyboardCandidate = false; keyboardChoices = []; beforeShift = undefined; shiftTap = false
   scheduleElementQuery(); updateHover()
+  void nextTick(updateMagnifier)
+}
+function rightClick() {
+  if (busy.value) return
+  if (selected.value || dragging.value || annotationOrigin) { reset(); status.value = '已取消选区，可重新框选。' }
+  else void cancel()
 }
 function setTool(id: string) { if (!busy.value) { abortPointer(); tool.value = id; error.value = ''; status.value = '' } }
 async function perform(action: Action) {
@@ -363,7 +407,8 @@ async function cancel() {
   finally { busy.value = false }
 }
 function keydown(event: KeyboardEvent) {
-  if (busy.value) { event.preventDefault(); return }
+  if (busy.value) { shiftTap = false; event.preventDefault(); return }
+  if (event.key !== 'Shift') shiftTap = false
   const input = event.target instanceof HTMLElement && event.target.closest('input,textarea,select')
   if (input) { if (event.key === 'Escape') { event.preventDefault(); (event.target as HTMLElement).blur() }; return }
   if (event.key === 'Escape') { event.preventDefault(); if (annotationOrigin) abortPointer(); else void cancel(); return }
@@ -379,13 +424,29 @@ function keydown(event: KeyboardEvent) {
     const key = event.key.toLowerCase()
     if (key === 'z') { event.preventDefault(); event.shiftKey ? redo() : undo() }
     if (key === 'c' || key === 's') { event.preventDefault(); void perform(key === 'c' ? 'copy' : 'save') }
+    if (key === 't') { event.preventDefault(); void perform('pin') }
+    if (key === 'a') {
+      event.preventDefault()
+      if (ready.value && frame.value && !dragging.value && !annotationOrigin) {
+        stopElementQuery(); selected.value = { x: 0, y: 0, width: frame.value.width, height: frame.value.height }
+        tool.value = 'cursor'; error.value = ''; status.value = ''
+      }
+    }
     return
   }
   if (event.key === 'Enter') {
     if (event.target instanceof HTMLElement && event.target.closest('button')) return
     event.preventDefault(); void perform('copy'); return
   }
-  if (event.key === 'Shift' && !selected.value && !event.repeat) { flushMove(); beforeShift = hovered.value; shiftHeld.value = true; keyboardCandidate = false; stopElementQuery(); updateHover() }
+  if (event.key === 'Alt') { altHeld.value = true; void nextTick(updateMagnifier); return }
+  if (event.key === 'Shift' && !event.repeat) {
+    flushMove()
+    shiftTap = showMagnifier.value && !dragging.value && !annotationOrigin
+    shiftStartedAt = performance.now()
+    if (!selected.value) { beforeShift = hovered.value; shiftHeld.value = true; keyboardCandidate = false; stopElementQuery(); updateHover() }
+    return
+  }
+  if (event.key.toLowerCase() === 'c') { event.preventDefault(); if (!event.repeat) void copyColor(); return }
   if (event.key.toLowerCase() === 'h') { event.preventDefault(); guidesVisible.value = !guidesVisible.value; return }
   if (event.key === 'Tab' && !selected.value) {
     event.preventDefault()
@@ -418,7 +479,23 @@ function keydown(event: KeyboardEvent) {
     selected.value = bounded(r)
   }
 }
-function keyup(event: KeyboardEvent) { if (event.key === 'Shift') { flushMove(); shiftHeld.value = false; beforeShift = undefined; if (!selected.value && !keyboardCandidate) { keyboardChoices = []; scheduleElementQuery(); updateHover() } } }
+function keyup(event: KeyboardEvent) {
+  if (event.key === 'Alt') altHeld.value = false
+  if (event.key === 'Shift') {
+    flushMove()
+    const input = event.target instanceof HTMLElement && event.target.closest('input,textarea,select')
+    if (shiftTap && !input && !busy.value && showMagnifier.value && performance.now() - shiftStartedAt <= 400) {
+      colorFormat.value = colorFormat.value === 'hex' ? 'rgb' : 'hex'; colorStatus.value = ''
+    }
+    shiftTap = false; shiftHeld.value = false; beforeShift = undefined
+    if (!selected.value && !keyboardCandidate) { keyboardChoices = []; scheduleElementQuery(); updateHover() }
+  }
+}
+function consumeShiftTap() { shiftTap = false }
+function blur() {
+  shiftTap = false; shiftHeld.value = false; altHeld.value = false; beforeShift = undefined
+  stopElementQuery(); if (!selected.value && !keyboardCandidate) updateHover()
+}
 function resize() { viewport.value = { width: window.innerWidth, height: window.innerHeight }; scheduleDraw() }
 function findEdges() {
   if (!source || !frame.value || !mounted) return
@@ -456,12 +533,18 @@ watch([annotations, draft, selected], scheduleDraw)
 watch(toolbar, element => {
   toolbarObserver?.disconnect()
   if (element) {
-    toolbarObserver = new ResizeObserver(([entry]) => { if (entry) toolbarSize.value = { width: element.offsetWidth, height: element.offsetHeight } })
+    // Intrinsic CSS width keeps left/top placement from changing the measured size.
+    toolbarObserver = new ResizeObserver(([entry]) => {
+      if (!entry) return
+      const width = element.offsetWidth, height = element.offsetHeight
+      if (width !== toolbarSize.value.width || height !== toolbarSize.value.height) toolbarSize.value = { width, height }
+    })
     toolbarObserver.observe(element)
   }
 })
 onMounted(async () => {
   window.addEventListener('keydown', keydown); window.addEventListener('keyup', keyup); window.addEventListener('resize', resize)
+  window.addEventListener('pointerdown', consumeShiftTap, true); window.addEventListener('blur', blur)
   try {
     const next = desktop ? await invoke<Frame>('get_capture_frame') : { dataUrl: '/demo-workspace.svg', width: 1200, height: 750, scaleFactor: 1, regions: [{ x: 0, y: 0, width: 1200, height: 750, label: '整个演示画面' }] }
     if (!mounted) return
@@ -512,13 +595,14 @@ onBeforeUnmount(() => {
   mounted = false; regionWorker?.terminate(); toolbarObserver?.disconnect()
   stopElementQuery(); cancelAnimationFrame(moveRequest); cancelAnimationFrame(drawRequest); clearTimeout(probeRequest)
   window.removeEventListener('keydown', keydown); window.removeEventListener('keyup', keyup); window.removeEventListener('resize', resize)
+  window.removeEventListener('pointerdown', consumeShiftTap, true); window.removeEventListener('blur', blur)
   source = undefined; pendingMove = undefined
 })
 </script>
 
 <template>
   <ScrollCapturePanel v-if="scrolling" :progress="scrollProgress" :busy="busy" :error="error" :status="status" @append="appendScroll" @finish="finishScroll" @cancel="cancel" />
-  <main v-else ref="stage" class="capture-stage" aria-label="截图区域选择" :class="{ 'is-dragging': dragging }" @pointerenter="move" @pointermove="move" @pointerleave="leave" @pointerdown="begin($event)" @pointerup="end" @pointercancel="abortPointer" @contextmenu.prevent="cancel">
+  <main v-else ref="stage" class="capture-stage" aria-label="截图区域选择" :class="{ 'is-dragging': dragging }" @pointerenter="move" @pointermove="move" @pointerleave="leave" @pointerdown="begin($event)" @pointerup="end" @pointercancel="abortPointer" @contextmenu.prevent="rightClick">
     <img v-if="frame" ref="captureImage" class="capture-source" :src="frame.dataUrl" alt="当前冻结的屏幕画面" draggable="false" />
     <div v-if="!currentRect" class="capture-shade" />
     <div v-if="currentRect" class="capture-selection" :class="{ 'is-selected': selected, 'is-drawing': tool !== 'cursor' }" :style="selectionStyle" @pointerdown.stop="begin($event, selected ? 'move' : 'new')" @dblclick.stop="tool === 'cursor' && perform('copy')">
@@ -529,11 +613,24 @@ onBeforeUnmount(() => {
       </template>
     </div>
     <div v-if="showGuides" class="capture-guides" aria-hidden="true"><i class="guide-horizontal" :style="{ top: `${pointer.clientY}px` }" /><i class="guide-vertical" :style="{ left: `${pointer.clientX}px` }" /></div>
-    <aside v-if="!selected" class="capture-hint" @pointerdown.stop @pointerenter="hideMagnifier = true" @pointerleave="hideMagnifier = false">
-      <span>{{ desktop ? '拖动或点击选区' : '原创演示 · 不读取屏幕' }}</span><span><kbd>Shift</kbd> 手动 <b>·</b> <kbd>Tab</kbd> 扩大 / <kbd>Shift+Tab</kbd> 缩小 <b>·</b> <kbd>H</kbd> 辅助线 <b>·</b> <kbd>Esc</kbd> 取消</span>
+    <aside v-if="ready && !error" class="capture-hint" aria-label="截图快捷操作提示">
+      <span v-if="!selected">{{ desktop ? '拖动或点击选择区域' : '原创演示 · 拖动或点击选区' }}</span>
+      <span v-if="!selected"><kbd>Tab</kbd> 扩大 / <kbd>Shift+Tab</kbd> 缩小 <b>·</b> 按住 <kbd>Shift</kbd> 手动框选</span>
+      <span v-else-if="tool === 'cursor'"><kbd>方向键</kbd> 微调 <b>·</b> <kbd>Shift</kbd> 10px <b>·</b> <kbd>Alt</kbd> 调整大小</span>
+      <span v-else>{{ tools.find(item => item.id === tool)?.label }}工具 <b>·</b> <kbd>V</kbd> 返回选区调整</span>
+      <span><kbd>{{ commandKey }}+A</kbd> 全屏 <b>·</b> <kbd>H</kbd> 辅助线<template v-if="selected && desktop"> <b>·</b> <kbd>{{ commandKey }}+T</kbd> 贴图</template></span>
+      <span v-if="selected">按住 <kbd>Alt</kbd> 放大镜 <b>·</b> <kbd>C</kbd> 复制颜色</span>
+      <span><kbd>右键</kbd> {{ selected || dragging ? annotations.length ? '重选并清除本次标注' : '重新框选' : '退出截图' }} <b>·</b> <kbd>Esc</kbd> 退出截图</span>
       <small v-if="regionNotice" class="capture-detection-note" role="status">{{ regionNotice }}</small>
+      <small v-if="status && !selected" class="capture-detection-note" role="status">{{ status }}</small>
     </aside>
-    <div v-show="showMagnifier" class="capture-magnifier" :style="magnifierStyle" aria-hidden="true"><canvas ref="magnifier" width="150" height="100" /><div><i :style="{ backgroundColor: pixelColor }" /><code>{{ pixelColor }}</code><small>{{ pointer.x }}, {{ pointer.y }}</small></div></div>
+    <div v-show="showMagnifier" class="capture-magnifier" :style="magnifierStyle" aria-label="取色放大镜">
+      <canvas ref="magnifier" width="150" height="100" aria-hidden="true" />
+      <div><i :style="{ backgroundColor: pixelColor }" /><code class="capture-color-value">{{ pixelText }}</code></div>
+      <small class="capture-pointer">{{ pointer.x }}, {{ pointer.y }}</small>
+      <p><kbd>C</kbd> 复制颜色<br />轻按 <kbd>Shift</kbd> 切换 RGB/HEX</p>
+      <small v-if="colorStatus || colorCopying" class="capture-color-status" role="status">{{ colorCopying ? '正在复制颜色…' : colorStatus }}</small>
+    </div>
     <section v-if="selected && !dragging" ref="toolbar" class="capture-toolbar" :style="toolbarStyle" aria-label="截图工具条" @pointerdown.stop @pointermove.stop @pointerenter="hideMagnifier = true" @pointerleave="hideMagnifier = false">
       <div class="capture-tools" role="toolbar" aria-label="就地标注与截图操作">
         <button v-for="item in tools" :key="item.id" :title="`${item.label} (${item.key})`" :aria-label="item.label" :aria-pressed="tool === item.id" :class="{ active: tool === item.id }" :disabled="busy" @click="setTool(item.id)"><Icon :name="item.id === 'redact' ? 'rect' : item.id" :size="18"/><i v-if="item.id === 'redact'" class="redact-dot"/></button>
@@ -546,7 +643,7 @@ onBeforeUnmount(() => {
         <button title="重新选择区域并清除本次标注" aria-label="重选区域" :disabled="busy" @click="reset"><Icon name="capture" :size="18"/></button>
         <button :title="scrollHint" aria-label="滚动长截图" :disabled="busy || !canStartScroll" @click="startScroll"><Icon name="scroll" :size="18"/></button>
         <button title="更多编辑：美化、贴纸与自动打码" aria-label="更多编辑" :disabled="busy || !validSelection" @click="perform('edit')"><Icon name="spark" :size="18"/></button>
-        <button :title="desktop ? '置顶为桌面贴图；双击贴图可关闭，右键可复制、保存或调整。' : '贴到桌面仅桌面版可用'" aria-label="贴到桌面" :disabled="busy || !desktop || !validSelection" @click="perform('pin')"><Icon name="pin" :size="18"/></button>
+        <button :title="desktop ? `贴到桌面（${commandKey}+T）；双击贴图可关闭，右键可复制、保存或调整。` : '贴到桌面仅桌面版可用'" aria-label="贴到桌面" :disabled="busy || !desktop || !validSelection" @click="perform('pin')"><Icon name="pin" :size="18"/></button>
         <button title="保存 PNG（⌘/Ctrl S）" aria-label="保存截图" :disabled="busy || !validSelection" @click="perform('save')"><Icon name="save" :size="18"/></button>
         <button title="取消截图（Esc）" aria-label="取消截图" :disabled="busy" @click="cancel"><Icon name="close" :size="18"/></button>
         <button class="capture-confirm" title="复制图片并完成（Enter 或 ⌘/Ctrl C）" aria-label="复制截图" :disabled="busy || !validSelection" @click="perform('copy')"><Icon name="check" :size="18"/><span>{{ busy ? '处理中' : '复制' }}</span></button>
@@ -562,5 +659,5 @@ onBeforeUnmount(() => {
 <style scoped>
 .capture-guides{position:absolute;inset:0;z-index:2;pointer-events:none}.capture-guides i{position:absolute;display:block;background:#dcf4b380;box-shadow:0 0 0 1px #0b132640}.guide-horizontal{left:0;width:100%;height:1px}.guide-vertical{top:0;width:1px;height:100%}
 .capture-stage{position:fixed;inset:0;background:#0b0e16;overflow:hidden;color:#f2f4fa;font-family:Inter,"PingFang SC","Microsoft YaHei",sans-serif;cursor:crosshair;user-select:none;touch-action:none}
-.capture-stage button{font:inherit}.capture-source{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;pointer-events:none}.capture-shade{position:absolute;inset:0;background:#06091470;pointer-events:none}.capture-selection{position:absolute;box-sizing:border-box;outline:1px solid #c8e7a0;outline-offset:-1px;box-shadow:0 0 0 9999px #05081375;z-index:1}.capture-selection.is-selected{cursor:move}.capture-selection.is-drawing{cursor:crosshair}.capture-edit-preview{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}.capture-dimensions{position:absolute;left:-1px;bottom:calc(100% + 5px);display:flex;gap:9px;padding:4px 7px;background:#151b25e8;border-radius:4px;white-space:nowrap;font-size:11px;pointer-events:none}.capture-dimensions.place-inside{bottom:auto;top:5px;left:5px}.capture-dimensions span{color:#adb7c7}.capture-dimensions strong{font-weight:550;font-variant-numeric:tabular-nums}.capture-handle{position:absolute;width:7px;height:7px;padding:0;border:1px solid #182316;background:#e1fda6;border-radius:1px}.handle-nw{top:-4px;left:-4px;cursor:nwse-resize}.handle-ne{top:-4px;right:-4px;cursor:nesw-resize}.handle-sw{bottom:-4px;left:-4px;cursor:nesw-resize}.handle-se{bottom:-4px;right:-4px;cursor:nwse-resize}.handle-n{top:-4px;left:calc(50% - 3px);cursor:ns-resize}.handle-s{bottom:-4px;left:calc(50% - 3px);cursor:ns-resize}.handle-w{left:-4px;top:calc(50% - 3px);cursor:ew-resize}.handle-e{right:-4px;top:calc(50% - 3px);cursor:ew-resize}.capture-hint{position:absolute;z-index:3;bottom:18px;left:50%;transform:translateX(-50%);display:flex;gap:16px;max-width:calc(100vw - 32px);padding:8px 12px;border:1px solid #ffffff1f;border-radius:6px;background:#151b25e8;cursor:default;font-size:11px;white-space:nowrap;color:#c3ccda}.capture-hint{flex-wrap:wrap;justify-content:center;row-gap:4px}.capture-detection-note{flex-basis:100%;font-size:10px;text-align:center;white-space:normal;color:#a7b8d1}.capture-hint b{font-weight:400;margin:0 6px;color:#667386}kbd{font:inherit;color:#f1f5f9}.capture-magnifier{position:absolute;z-index:4;width:150px;padding:4px;border:1px solid #ffffff40;border-radius:6px;background:#101625f5;pointer-events:none}.capture-magnifier canvas{display:block;width:150px;height:100px}.capture-magnifier div{display:flex;align-items:center;justify-content:space-between;gap:4px;padding-top:5px}.capture-magnifier i{width:10px;height:10px;border:1px solid #ffffff25}.capture-magnifier code,.capture-magnifier small{font-size:10px;color:#c3ccda}.capture-toolbar{position:absolute;z-index:5;max-width:calc(100vw - 16px);box-sizing:border-box;padding:5px;background:#f9fafb;color:#263141;border:1px solid #d5dbe2;box-shadow:0 3px 12px #0003;border-radius:7px;cursor:default}.capture-tools{display:flex;flex-wrap:wrap;align-items:center;gap:2px}.capture-tools button{position:relative;display:inline-flex;align-items:center;justify-content:center;gap:4px;width:30px;height:30px;padding:0;border:0;border-radius:4px;background:transparent;color:inherit;cursor:pointer}.capture-tools button:hover{background:#e4e9f0}.capture-tools button.active{background:#e3efd6;color:#375824}.capture-tools button.capture-confirm{width:auto;min-width:57px;padding:0 8px;background:#dceacb;color:#2a441e;font-size:12px}.capture-tools button:disabled,.capture-tools input:disabled,.capture-tools select:disabled{opacity:.4;cursor:default}.capture-tools button:focus-visible,.capture-tools input:focus-visible,.capture-tools select:focus-visible{outline:2px solid #729452;outline-offset:1px}.separator{height:20px;width:1px;background:#d7dde5;margin:0 4px}.capture-tools input[type=color]{width:25px;height:25px;padding:2px;border:1px solid #d4dbe3;background:white;cursor:pointer;border-radius:4px}.capture-tools select{width:38px;height:26px;background:transparent;border:0;color:inherit;font-size:11px}.redact-dot{position:absolute;width:9px;height:8px;background:currentColor;pointer-events:none}.capture-text{padding:5px 2px 0}.capture-text input{box-sizing:border-box;width:100%;padding:7px 9px;border:1px solid #d0d8e2;border-radius:4px;font:inherit;font-size:12px;user-select:text;background:white;color:#263141}.capture-status{font-size:11px;line-height:1.5;white-space:normal;overflow-wrap:anywhere;margin:5px 4px 2px;max-width:600px;color:#375824}.capture-status.failure{color:#9d2f38}.capture-error{position:absolute;z-index:8;top:50%;left:50%;transform:translate(-50%,-50%);width:min(380px,calc(100vw - 48px));padding:25px;background:#151c2c;border:1px solid #ffb4ac66;border-radius:10px;cursor:default}.capture-error strong{color:#ffd0cb;font-size:15px}.capture-error p{font-size:13px;line-height:1.7;color:#abb6cb;overflow-wrap:anywhere}.capture-error button{background:#ffffff10;border:0;border-radius:5px;padding:9px;color:white;width:100%;cursor:pointer}.capture-loading{position:absolute;inset:0;display:grid;place-items:center;font-size:14px;color:#aebbd0;pointer-events:none}.is-dragging .capture-selection{cursor:crosshair}@media(max-width:600px){.capture-hint{gap:6px;font-size:10px}.capture-tools{gap:1px}.capture-tools button{width:28px}.separator{margin:0 2px}}
+.capture-stage button{font:inherit}.capture-source{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;pointer-events:none}.capture-shade{position:absolute;inset:0;background:#06091470;pointer-events:none}.capture-selection{position:absolute;box-sizing:border-box;outline:1px solid #c8e7a0;outline-offset:-1px;box-shadow:0 0 0 9999px #05081375;z-index:1}.capture-selection.is-selected{cursor:move}.capture-selection.is-drawing{cursor:crosshair}.capture-edit-preview{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}.capture-dimensions{position:absolute;left:-1px;bottom:calc(100% + 5px);display:flex;gap:9px;padding:4px 7px;background:#151b25e8;border-radius:4px;white-space:nowrap;font-size:11px;pointer-events:none}.capture-dimensions.place-inside{bottom:auto;top:5px;left:5px}.capture-dimensions span{color:#adb7c7}.capture-dimensions strong{font-weight:550;font-variant-numeric:tabular-nums}.capture-handle{position:absolute;width:7px;height:7px;padding:0;border:1px solid #182316;background:#e1fda6;border-radius:1px}.handle-nw{top:-4px;left:-4px;cursor:nwse-resize}.handle-ne{top:-4px;right:-4px;cursor:nesw-resize}.handle-sw{bottom:-4px;left:-4px;cursor:nesw-resize}.handle-se{bottom:-4px;right:-4px;cursor:nwse-resize}.handle-n{top:-4px;left:calc(50% - 3px);cursor:ns-resize}.handle-s{bottom:-4px;left:calc(50% - 3px);cursor:ns-resize}.handle-w{left:-4px;top:calc(50% - 3px);cursor:ew-resize}.handle-e{right:-4px;top:calc(50% - 3px);cursor:ew-resize}.capture-hint{position:absolute;z-index:3;bottom:14px;left:14px;display:flex;flex-direction:column;align-items:flex-start;gap:5px;max-width:calc(100vw - 28px);box-sizing:border-box;padding:10px 12px;border:1px solid #ffffff1f;border-radius:5px;background:#151b25d9;pointer-events:none;font-size:11px;line-height:1.4;color:#c3ccda}.capture-hint span{display:block}.capture-detection-note{font-size:10px;white-space:normal;color:#a7b8d1}.capture-hint b,.capture-magnifier b{font-weight:400;margin:0 4px;color:#667386}kbd{font:inherit;color:#f1f5f9}.capture-magnifier{position:absolute;z-index:4;box-sizing:content-box;width:150px;padding:4px;border:1px solid #ffffff40;border-radius:6px;background:#101625f5;pointer-events:none}.capture-magnifier canvas{display:block;width:150px;height:100px}.capture-magnifier div{display:flex;align-items:center;justify-content:center;gap:5px;padding-top:5px}.capture-magnifier i{width:10px;height:10px;flex-shrink:0;border:1px solid #ffffff25}.capture-magnifier code,.capture-magnifier small{font-size:10px;color:#c3ccda}.capture-magnifier .capture-pointer{display:block;text-align:center;margin-top:3px}.capture-magnifier p{font-size:10px;line-height:1.4;margin:5px 0 1px;text-align:center;color:#b9c5d6;white-space:nowrap}.capture-color-status{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center;margin-top:4px}.capture-toolbar{position:absolute;z-index:5;width:max-content;max-width:calc(100vw - 16px);box-sizing:border-box;padding:5px;background:#f9fafb;color:#263141;border:1px solid #d5dbe2;box-shadow:0 3px 12px #0003;border-radius:7px;cursor:default}.capture-tools{display:flex;flex-wrap:wrap;align-items:center;gap:2px}.capture-tools button{position:relative;display:inline-flex;align-items:center;justify-content:center;gap:4px;width:30px;height:30px;padding:0;border:0;border-radius:4px;background:transparent;color:inherit;cursor:pointer}.capture-tools button:hover{background:#e4e9f0}.capture-tools button.active{background:#e3efd6;color:#375824}.capture-tools button.capture-confirm{width:auto;min-width:57px;padding:0 8px;background:#dceacb;color:#2a441e;font-size:12px}.capture-tools button:disabled,.capture-tools input:disabled,.capture-tools select:disabled{opacity:.4;cursor:default}.capture-tools button:focus-visible,.capture-tools input:focus-visible,.capture-tools select:focus-visible{outline:2px solid #729452;outline-offset:1px}.separator{height:20px;width:1px;background:#d7dde5;margin:0 4px}.capture-tools input[type=color]{width:25px;height:25px;padding:2px;border:1px solid #d4dbe3;background:white;cursor:pointer;border-radius:4px}.capture-tools select{width:38px;height:26px;background:transparent;border:0;color:inherit;font-size:11px}.redact-dot{position:absolute;width:9px;height:8px;background:currentColor;pointer-events:none}.capture-text{padding:5px 2px 0}.capture-text input{box-sizing:border-box;width:100%;padding:7px 9px;border:1px solid #d0d8e2;border-radius:4px;font:inherit;font-size:12px;user-select:text;background:white;color:#263141}.capture-status{font-size:11px;line-height:1.5;white-space:normal;overflow-wrap:anywhere;margin:5px 4px 2px;max-width:600px;color:#375824}.capture-status.failure{color:#9d2f38}.capture-error{position:absolute;z-index:8;top:50%;left:50%;transform:translate(-50%,-50%);width:min(380px,calc(100vw - 48px));padding:25px;background:#151c2c;border:1px solid #ffb4ac66;border-radius:10px;cursor:default}.capture-error strong{color:#ffd0cb;font-size:15px}.capture-error p{font-size:13px;line-height:1.7;color:#abb6cb;overflow-wrap:anywhere}.capture-error button{background:#ffffff10;border:0;border-radius:5px;padding:9px;color:white;width:100%;cursor:pointer}.capture-loading{position:absolute;inset:0;display:grid;place-items:center;font-size:14px;color:#aebbd0;pointer-events:none}.is-dragging .capture-selection{cursor:crosshair}@media(max-width:600px){.capture-hint{gap:6px;font-size:10px}.capture-tools{gap:1px}.capture-tools button{width:28px}.separator{margin:0 2px}}
 </style>

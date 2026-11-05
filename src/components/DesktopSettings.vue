@@ -24,6 +24,10 @@ async function save() {
   catch (e) { const error=String(e);await refresh();message.value=error; }
   finally { busy.value = false; }
 }
+function fillSnipasteShortcuts() {
+  settings.value.captureShortcut = 'F1'; settings.value.pinShortcut = 'F3';
+  message.value = '已填入 F1 截图、F3 贴最近原图；点击“保存桌面设置”后生效。';
+}
 async function permissions() {
   try { const status = await invoke<{ platform: string; captureAvailable: boolean; elementDetection?: boolean; error?: string }>('get_app_status'); detection.value = status; message.value = status.error || (status.captureAvailable ? '截图权限已可用。' : '请在系统设置 → 隐私与安全性 → 屏幕与系统音频录制中允许 Starshot（星镜），然后重新打开应用。'); }
   catch (e) { message.value = String(e); }
@@ -46,7 +50,9 @@ onBeforeUnmount(() => { mounted = false; unlisten?.(); });
     <fieldset :disabled="!desktop || busy">
       <label class="settings-input">开始截图<input v-model="settings.captureShortcut" aria-label="开始截图快捷键" maxlength="100" /></label>
       <label class="settings-input">贴最近原图<input v-model="settings.pinShortcut" aria-label="贴图快捷键" maxlength="100" /></label>
-      <p class="field-note">CommandOrControl 在 Mac 表示 ⌘，在 Windows 表示 Ctrl；例如 CommandOrControl+Shift+2。冲突时保留原快捷键。</p>
+      <button class="button" @click="fillSnipasteShortcuts">填入 Snipaste 快捷键</button>
+      <p class="field-note">F1 开始截图，F3 贴最近原图。Mac 可能需要同时按 Fn；如果 Snipaste 或其他软件占用，请改用其他组合。</p>
+      <p class="field-note">CommandOrControl 在 Mac 表示 ⌘，在 Windows 表示 Ctrl；例如 CommandOrControl+Shift+2。保存时检查占用冲突，失败会提示原因。</p>
       <label class="settings-input"><span>贴图焦点光圈</span><input v-model="settings.pinHalo" type="checkbox" aria-label="贴图焦点光圈"/></label>
       <p class="field-note">默认开启：活跃贴图显示蓝色光圈，其他贴图显示灰色阴影。右键贴图也可开关，选择会保存在本机。</p>
       <label class="settings-input"><span>开机启动</span><input v-model="settings.autostart" type="checkbox" aria-label="开机启动"/></label><label class="settings-input"><span>启动时留在托盘</span><input v-model="settings.startInTray" type="checkbox" aria-label="启动时留在托盘"/></label><button class="button" @click="save">保存桌面设置</button>
