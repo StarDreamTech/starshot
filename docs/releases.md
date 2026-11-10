@@ -37,6 +37,8 @@ npm run version:check -- v0.3.1
 - `release-manifest.mjs`：要求完整且唯一的平台产物，真实验签并核对版本绑定，然后生成 latest.json、SHA256SUMS 和发布说明。
 - 流程只创建/更新 Release 草稿，不自动公开；拒绝覆盖已发布的同版本 Release 及已有草稿资产。已有资产的草稿需要重跑时，先人工检查并删除旧草稿，流程不会覆盖文件。
 
+2026-11-10准备0.3.2时，两个旧`macos-14`作业在执行任何步骤前被取消，GitHub注释为`The configuration 'macos-14-arm64-us-default' is not supported`。GitHub已于2026-11-02停用该镜像，现将普通验证与签名发行改为`macos-15`（arm64）；来源为[官方退役公告](https://github.com/actions/runner-images/issues/13518)。已有发行标签不重写：从修正后的`main`手动运行`release.yml`并传入原标签，工作流仍检出标签所指源码并校验版本/提交。
+
 Windows构建模型由 `scripts/prepare-ocr-models.mjs` 下载；macOS使用系统Vision，构建/测试不需要下载这些模型。Windows专用依赖由Cargo目标配置选择，模型许可资源只在`tauri.windows.conf.json`中声明，Mac包不附带。2026-10-28上游原地址返回403，现从独立的 `ocr-models-v1` 构建依赖Release获取已核验的原版副本；大小、SHA-256与0.3.0内置模型完全一致，保留作者、原始来源与CC-BY-SA-4.0许可。该Release标为prerelease，不进入应用稳定更新通道；不要将模型二进制加入Git或改成运行时下载。
 
 0.3.1的Windows CI先校验并安装公开0.3.0，再用最终NSIS执行隔离升级，检查版本、卸载登记、固定像素OCR与卸载清理。macOS可在本机运行下列默认忽略的测试：目录中放公开0.3.0的 `Starshot.app`、候选版 `latest.json` 和对应已签名 `.app.tar.gz`，测试仅替换临时副本，并检查损坏包被拒绝、旧包不变和新版签名完整性。两项均不等同于应用GUI的下载、重启及会话恢复验收。
