@@ -457,3 +457,17 @@ Homebrew真实安装到仓库忽略的隔离目录；brew info的安装版本、
 - ego-browser真实Chromium/Vue/Canvas/Worker与模拟IPC：截图回归11组通过，包含自动串行推进、在途Esc暂停后无后续调用、重复帧与失败停止、竖横方向锁定/参数、反向滚轮选项、预览蓝框及布局、保存取消和完成出口；详情/帮助回归13组通过。截图仅原创固定像素，产物位于Git忽略的`artifacts/capture-toolbar/`及`artifacts/starclip-details-20261029/`，未读真实剪贴板或捕获真实桌面。
 - macOS原生输入：`tests/macos-scroll-fixture.swift`创建原创AppKit双向滚动窗口，`macos-scroll-smoke.rs`核实子进程PID与原窗口几何后调用生产滚动函数，显式忽略测试实跑1项通过；本机使用`STARSHOT_SCROLL_REVERSE=1`，收到夹具竖向偏移9及后续横向偏移121的回报。仅使用既有事件权限，无截图、剪贴板或第三方内容读取，不覆盖生产采集/稳定检测/拼接/保存全流程。开发过程中曾有方向相反、窗口无法路由或目标复核失败的样本，未计为通过；最终保留反向输入校正和目标保护，不把本机方向结果推广到所有设置。
 - 平台：`npm run tauri -- build --bundles app`成功，macOS arm64 `Starshot.app`约11.37MiB，ad-hoc签名且`codesign --verify --deep --strict`通过，未公证。未执行本轮Windows构建/原生输入及双平台真实生产截图矩阵，未替换日用应用、提交、推送、发行或更新Homebrew。向上/向左反向拼接、复杂固定页眉/动态内容及长时间稳定性仍保留为限制。
+
+## 0.3.2稳定发行与Homebrew（北京时间2026-11-11）
+
+- 用户在本对话明确要求「发布版本」，本次范围为提交/推送本轮已完成功能、递增至0.3.2、公开双平台安装包/更新清单并同步Homebrew；没有据此安装或替换本机应用。原工作区改动先检查并保留，未将真实屏幕、用户参考图、凭据或日志提交到Git。
+- `54d880b2e05c61e729af4ff9b311fe36aa171071`包含长截图、分享、托盘、开源链接及此前已完成功能；六处版本一致，`v0.3.2`固定指向此源码。`371483f`只修改runner与发布说明，应用源码和标签一致；后续文档提交不改发行标签。
+- 本地升版后`npm test`62通过/1项因缺少minisign跳过，`npm run build`通过；Rust无默认特性43通过、desktop lib70通过，`cargo check --locked`、`cargo fmt -- --check`、`git diff --check`通过。CI安装真实minisign并强制执行签名拒绝回归；浏览器和原生滚轮夹具证据沿用上节明确范围，没有把它们扩展为生产截图全流程。
+- 首轮普通验证42845899895和签名发行42845898155的macos-14作业无步骤即取消，GitHub注释为`The configuration 'macos-14-arm64-us-default' is not supported`。普通验证与发行改用macos-15后，从修正后的main手动dispatch原v0.3.2标签；旧运行保留cancelled，不重写标签、不把未执行项算通过。
+- 普通双平台验证[42847325913](https://github.com/cpython666/starshot/actions/runs/42847325913)全部成功，覆盖release-safety、两平台前后端测试/格式、macOS app/DMG、Windows NSIS、离线OCR及隔离升级/卸载。
+- 签名发行[42847334356](https://github.com/cpython666/starshot/actions/runs/42847334356)的validate、两平台签名构建、原始像素OCR/安装器检查、真实minisign双平台验签和完整产物汇总均通过。两次草稿创建均403，整个工作流为failure；已登录账号预建空草稿后CI仍未能复用。最终下载并核验完整CI artifact `13781260729`，由本次授权账号上传8个文件并公开，没有新增发行Secret、放宽签名或覆盖旧资产。本地独立候选构建虽通过，但不混入最终发行包。
+- Windows最终NSIS为16,539,634字节，SHA-256为`3f4defcce28bb62191bfb07ce4ee0795c15727b77652b8ec784a47eaa4724f5d`，与安装器检查报告一致。隔离0.3.0→0.3.2升级、前后版本/卸载登记、固定原创像素离线OCR和卸载清理全部通过；未测试Windows GUI完整更新与长截图原生滚轮。
+- macOS最终CI DMG为5,176,997字节，SHA-256为`c1ebc39e9cae4cafbb5c08c307f4ff2aca07bb802ae8caf392496b8227d68eb4`；只读挂载确认版本/构建号0.3.2、`com.starshot.desktop`、arm64、最低macOS12.0及严格codesign。最终更新archive SHA-256为`e5823840fe18f824515ef75d49806046a7e237918b9aa148b0acaed909490a78`。`macos-updater-smoke`对最终CI包实跑1项通过：真实updater拒绝损坏包且旧0.3.0副本不变，签名0.3.2成功装入临时副本并通过codesign；不启动/重启用户应用、不读取真实图片会话。
+- v0.3.2于2026-11-10 16:26:09 UTC（北京时间11月11日00:26:09）公开，`draft=false`、`prerelease=false`且成为latest；8个公开附件的API SHA-256全部与CI文件匹配。匿名下载的稳定latest.json与CI文件逐字节一致（SHA-256 `e2e292157b412b17ad35895bdb40949faf1d1d6abc308ad71263bb900b9752f3`），同时包含darwin-aarch64和windows-x86_64。清单pub_date为汇总时间，不代替GitHub实际公开时间。
+- Homebrew Tap提交`9ff014cb18bf6f4c228e669c64ef24f61e978868`已公开0.3.2，其他产品的并发更新先正常合入，未强推或覆盖。Ruby语法、style、livecheck（0.3.2→0.3.2）、在线严格audit、fetch通过；实际缓存DMG与CI文件逐字节一致。本机只同步Tap元数据，没有Homebrew应用安装/卸载或替换`/Applications/Starshot.app`。
+- 仍未完成长截图双平台生产采集/复杂页面矩阵、Windows原生输入、0.3.2原生GUI下载/重启与真实会话恢复、混合DPI全矩阵或平台发行者签名/公证。macOS仍ad-hoc，Windows仍无发行者证书。自动检查、平台构建、隔离安装和日用安装保持分开记录；所有候选包和私有操作日志仅保留于Git忽略的`artifacts/release-0.3.2/`。

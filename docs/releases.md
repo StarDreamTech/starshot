@@ -62,7 +62,15 @@ Tauri 更新签名与平台代码签名不是同一件事。目前 macOS 默认 
 
 当前执行过的检查与尚未验证项以 docs/verification.md 为准。
 
-## 当前公开版本：0.3.1
+## 当前公开版本：0.3.2
+
+[v0.3.2](https://github.com/cpython666/starshot/releases/tag/v0.3.2)于2026-11-10 16:26:09 UTC（北京时间11月11日00:26:09）公开为稳定latest，标签源码为`54d880b`。macOS Apple Silicon与Windows x64安装包、独立Tauri更新签名、latest.json及SHA256SUMS共8个附件齐全；公开API中每个附件的SHA-256与已核验CI文件一致，匿名稳定清单下载也与CI文件逐字节一致。
+
+普通双平台验证[42847325913](https://github.com/cpython666/starshot/actions/runs/42847325913)全部成功；签名发行[42847334356](https://github.com/cpython666/starshot/actions/runs/42847334356)的版本/测试、双平台构建和真实minisign汇总验签均成功，但两次在创建草稿时收到`Resource not accessible by integration`（403），整个签名工作流不是成功状态。当前账号预建空草稿后，CI仍不能复用它；最终由用户本次发布授权下的已登录账号上传完整验签产物并公开，没有扩大发行Secret或降低校验要求。保留原标签，不覆盖既有版本或资产。下次发布如仍遇同类权限问题，可核验完整CI产物后使用已获授权的账号完成草稿和公开操作，不把控制面失败记成构建或验签失败，也不反过来宣称整个流水线全绿。
+
+Windows最终NSIS通过0.3.0→0.3.2隔离升级、固定原创像素OCR、登记及卸载检查；macOS最终CI包通过DMG只读挂载、版本/架构/严格codesign，以及真实updater在临时0.3.0副本上的损坏包拒绝与签名0.3.2安装。以上不覆盖原生GUI下载/重启/真实会话恢复或长截图生产采集全流程。Homebrew Cask已同步到`9ff014c`；本次没有安装或替换`/Applications/Starshot.app`，平台签名/公证和原生验收限制保留。
+
+## 历史公开版本：0.3.1
 
 [v0.3.1](https://github.com/cpython666/starshot/releases/tag/v0.3.1)于2026-10-28 12:15:48 UTC公开，源码标签为 `fe609e8`，`draft=false`、`prerelease=false`，已设为latest。普通验证40681522684与签名发行40683246836全部通过；公开稳定清单与CI最终文件逐字节一致，运行中的0.3.0原生应用实际显示发现0.3.1。Homebrew Tap已同步到 `98abcab`，在线审查、下载及隔离安装/卸载通过。
 

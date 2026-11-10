@@ -2,7 +2,7 @@
 
 星镜使用已有的公开安装源 [cpython666/homebrew-tap](https://github.com/cpython666/homebrew-tap)，目标文件为 `Casks/starshot.rb`；现有 `Casks/starclip.rb` 独立保留。2026-10-26 核对远端默认分支为 `main`，基线提交为 `e11f8f06a43e4754855a8f101a39bc712aebdf08`，仓库没有额外 AGENTS 或发布工作流。
 
-[v0.3.1](https://github.com/cpython666/starshot/releases/tag/v0.3.1)已于2026-10-28北京时间公开并成为应用内最新更新。Tap的 `Casks/starshot.rb` 与安装说明已同步，最终提交为 [`98abcab`](https://github.com/cpython666/homebrew-tap/commit/98abcab34c228aa64d6e4faf68165b37a88c6bcb)，可执行 `brew install --cask cpython666/tap/starshot`。仅提供Apple Silicon、macOS 12+；Windows使用独立NSIS安装包。
+[v0.3.2](https://github.com/cpython666/starshot/releases/tag/v0.3.2)已于北京时间2026-11-11公开并成为应用内最新更新。Tap的 `Casks/starshot.rb` 与安装说明已同步，发行提交为 [`9ff014c`](https://github.com/cpython666/homebrew-tap/commit/9ff014cb18bf6f4c228e669c64ef24f61e978868)，可执行 `brew install --cask cpython666/tap/starshot`。仅提供Apple Silicon、macOS 12+；Windows使用独立NSIS安装包。
 
 ## 生成 Cask
 
@@ -53,7 +53,14 @@ brew uninstall --cask cpython666/tap/starshot
 
 `--greedy` 将声明自更新的 Cask 纳入 Homebrew 升级。升级前应导出或备份当前编辑并退出星镜；不使用 `--force` 覆盖已有手动安装的版本。普通卸载只管理应用，不主动删除星镜恢复点。[Homebrew 命令说明](https://docs.brew.sh/Manpage)
 
-GitHub 的 prerelease 可以通过固定 tag 下载，但不能成为 latest release。`v0.3.0`当时只提供固定tag预览下载；`v0.3.1`现已成为`/releases/latest/download/latest.json`的公开目标。[GitHub Release 规则](https://docs.github.com/en/rest/releases/releases#create-a-release)
+GitHub 的 prerelease 可以通过固定 tag 下载，但不能成为 latest release。`v0.3.0`当时只提供固定tag预览下载；当前`v0.3.2`已成为`/releases/latest/download/latest.json`的公开目标。[GitHub Release 规则](https://docs.github.com/en/rest/releases/releases#create-a-release)
+
+## 0.3.2 已验证结果
+
+- 只从最终CI产物生成Cask：DMG为5,176,997字节，SHA-256为`c1ebc39e9cae4cafbb5c08c307f4ff2aca07bb802ae8caf392496b8227d68eb4`；DMG只读挂载确认0.3.2、正式标识、arm64和macOS 12起，严格codesign通过，仍ad-hoc且未公证。
+- Ruby语法、`brew style`、`brew livecheck`、在线严格`brew audit`、`brew fetch`均通过。livecheck实际为`0.3.2 ==> 0.3.2`，Homebrew缓存与最终CI DMG逐字节一致，没有使用占位校验和。
+- Tap提交`9ff014c`已公开，安装源只修改星镜Cask及其README段落；发布期间先合入其他产品的并发更新，未覆盖它们。本机Tap元数据已快进同步，Cask与生成文件一致；没有执行应用安装/卸载、移除quarantine或覆盖日用应用。
+- 本轮不把此前0.3.1的Homebrew隔离安装测试算作0.3.2验收。当前Windows安装器隔离升级/卸载和macOS临时副本更新安装的独立结果见[验证记录](verification.md)，下载和审查日志仅保留在Git忽略的`artifacts/release-0.3.2/`。
 
 ## 0.3.1 已验证结果
 
