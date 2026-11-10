@@ -18,6 +18,7 @@ import { prepareSession, serializeSession, SESSION_SCHEMA_VERSION, SESSION_THEME
 import { DEFAULT_STYLE, renderImage, renderPreview, calculateLayout, type Annotation, type EditorStyle } from './editor'
 import { normalizeRect, clampRect, type Rect, type Point } from './geometry'
 import { shortcutLabel } from './shortcuts'
+import { projectLinks, openProjectLink } from './project-links'
 
 const view = ref(new URLSearchParams(location.search).get('view'))
 const desktop = isTauri()
@@ -43,8 +44,14 @@ const settingsTabs = [{id:'appearance',label:'外观'},{id:'shortcuts',label:'�
 type SettingsTab = typeof settingsTabs[number]['id']
 const settingsTab = ref<SettingsTab>('shortcuts')
 const settingsContent = ref<HTMLElement>()
+const menuUpdateRequest = ref(0), shortcutsPaused = ref(false), helpExpanded = ref(false)
+let shortcutsPauseRevision = 0, menuUpdateSequence = 0
 const themePickerOpen = ref(false), themePicker = ref<HTMLElement>(), themeTrigger = ref<HTMLButtonElement>()
 const status = ref('图片只在本机处理，不上传。')
+async function visitProject(event: MouseEvent, target: keyof typeof projectLinks) {
+  try { await openProjectLink(event, target) }
+  catch (error) { status.value = `无法打开项目链接：${String(error)}`; isError.value = true }
+}
 const isError = ref(false)
 const renderError = ref('')
 const busy = ref(false)
@@ -117,6 +124,25 @@ function openSettings(tab:SettingsTab='shortcuts'){
   if(updateBusy.value&&tab!=='updates')return
   if(themePickerOpen.value)themeTrigger.value?.focus()
   themePickerOpen.value=false;settingsTab.value=tab;modal.value='settings'
+}
+async function receiveMenuRequest(){
+  if(!initialized.value||disposed)return
+  try{
+    const request=await invoke<string|null>('take_menu_request')
+    if(!request||disposed||exitPending.value)return
+    if(request==='updates'){
+      openSettings('updates');menuUpdateRequest.value=++menuUpdateSequence
+    }else if(request==='settings')openSettings('shortcuts')
+    else if(request==='about'||request==='help'){
+      helpExpanded.value=request==='help';openSettings('about')
+    }
+    await nextTick()
+    if(request==='help'){
+      const help=document.getElementById('capture-help') as HTMLDetailsElement|null
+      if(help){help.open=true;help.scrollIntoView({block:'start'})}
+    }
+    else if(settingsContent.value)settingsContent.value.scrollTop=0
+  }catch(e){feedback(String(e),true)}
 }
 async function selectSettingsTab(tab:SettingsTab){
   if(updateBusy.value)return
@@ -349,7 +375,7 @@ watch(actionsBlocked,value=>{if(value)closeThemePicker()})
 watch(modal,async(value,previous)=>{if(value)closeThemePicker();if(value&&!previous)modalTrigger=document.activeElement as HTMLElement;await nextTick();if(value)document.querySelector<HTMLElement>('.dialog button')?.focus();else modalTrigger?.focus()})
 watch(theme,value=>{document.documentElement.dataset.theme=value;applyAppearance(document.documentElement,appearance.value,['moon','plain','sakura'].includes(value));try{localStorage.setItem('starshot-theme',value)}catch{feedback('外观已应用，本地偏好保存失败。',true)}})
 watch(image,async()=>{await nextTick();resizeObserver?.disconnect();if(stage.value){resizeObserver?.observe(stage.value);updateFit();scheduleRender()}})
-onMounted(async()=>{document.documentElement.dataset.theme=theme.value;window.addEventListener('keydown',onKey);document.addEventListener('pointerdown',themePickerOutside);document.addEventListener('focusin',themePickerOutside);resizeObserver=new ResizeObserver(()=>{updateFit();scheduleRender()});if(stage.value)resizeObserver.observe(stage.value);if(desktop&&!view.value){try{const off1=await listen<{dataUrl:string;width:number;height:number;name:string}>('capture-complete',event=>void captured(event.payload));const off2=await listen<string>('capture-error',event=>feedback(event.payload,true));const off3=await listen<string>('pin-error',event=>feedback(event.payload,true));const off4=await listen('pin-edit-requested',()=>void receivePendingPinEdit());if(disposed){off1();off2();off3();off4();return}unlisten.push(off1,off2,off3,off4);const initialVersion=loadVersion;const last=await invoke<{dataUrl:string;width:number;height:number;name:string}|null>('get_current_image');if(last&&loadVersion===initialVersion&&!disposed&&!updateBusy.value)await loadImage(last);const state=await invoke<{captureAvailable:boolean;error?:string}>('get_app_status');if(state.error)feedback(state.error,true)}catch(e){feedback(`桌面服务：${String(e)}`,true)}}initialized.value=true;void reportEditorState();if(desktop&&!view.value)void receivePendingPinEdit()})
+onMounted(async()=>{document.documentElement.dataset.theme=theme.value;window.addEventListener('keydown',onKey);document.addEventListener('pointerdown',themePickerOutside);document.addEventListener('focusin',themePickerOutside);resizeObserver=new ResizeObserver(()=>{updateFit();scheduleRender()});if(stage.value)resizeObserver.observe(stage.value);if(desktop&&!view.value){try{const off1=await listen<{dataUrl:string;width:number;height:number;name:string}>('capture-complete',event=>void captured(event.payload));const off2=await listen<string>('capture-error',event=>feedback(event.payload,true));const off3=await listen<string>('pin-error',event=>feedback(event.payload,true));const off4=await listen('pin-edit-requested',()=>void receivePendingPinEdit());const off5=await listen('menu-requested',()=>void receiveMenuRequest());const off6=await listen<boolean>('shortcuts-paused',event=>{shortcutsPauseRevision++;shortcutsPaused.value=event.payload});if(disposed){off1();off2();off3();off4();off5();off6();return}unlisten.push(off1,off2,off3,off4,off5,off6);const initialVersion=loadVersion;const last=await invoke<{dataUrl:string;width:number;height:number;name:string}|null>('get_current_image');if(last&&loadVersion===initialVersion&&!disposed&&!updateBusy.value)await loadImage(last);const pauseRevision=shortcutsPauseRevision;const state=await invoke<{captureAvailable:boolean;shortcutsPaused?:boolean;error?:string}>('get_app_status');if(pauseRevision===shortcutsPauseRevision)shortcutsPaused.value=!!state.shortcutsPaused;if(state.error)feedback(state.error,true)}catch(e){feedback(`桌面服务：${String(e)}`,true)}}initialized.value=true;void reportEditorState();if(desktop&&!view.value){void receivePendingPinEdit();void receiveMenuRequest()}})
 onBeforeUnmount(()=>{disposed=true;loadVersion++;unlisten.forEach(off=>off());resizeObserver?.disconnect();window.removeEventListener('keydown',onKey);document.removeEventListener('pointerdown',themePickerOutside);document.removeEventListener('focusin',themePickerOutside);cancelAnimationFrame(renderRequest);cancelDelayIfPending()})
 
 function drawGuides(ctx:CanvasRenderingContext2D){
@@ -472,7 +498,7 @@ onMounted(async()=>{
     <input ref="backgroundInput" class="sr-only" type="file" accept="image/png,image/jpeg,image/webp" aria-label="导入背景图片" @change="onFile($event,true)" />
     <header class="app-header" :inert="actionsBlocked || undefined">
       <a class="brand" href="#" @click.prevent="modal=null"><img src="/starshot.svg" alt=""/><div><strong>星镜<span>STARSHOT</span></strong><small>截图 · 标注 · 图片美化</small></div></a>
-      <div class="header-actions"><span v-if="!desktop" class="preview-label">浏览器预览</span><button class="button subtle" @click="importInput?.click()"><Icon name="import" :size="16"/>导入图片</button><button class="button primary" :disabled="captureBusy" @click="startCapture"><Icon name="capture" :size="17"/>{{captureBusy?'准备截图…':'开始截图'}}<kbd v-if="desktop">{{shortcutLabel(shortcuts.captureShortcut,isMac)}}</kbd></button></div>
+      <div class="header-actions"><span v-if="!desktop" class="preview-label">浏览器预览</span><a class="icon-button github-link" :href="projectLinks.repository" target="_blank" rel="noopener noreferrer" title="查看开源项目（GitHub）" aria-label="查看开源项目（GitHub）" @click="visitProject($event, 'repository')"><Icon name="github" :size="18"/></a><button class="button subtle" @click="importInput?.click()"><Icon name="import" :size="16"/>导入图片</button><button class="button primary" :disabled="captureBusy" @click="startCapture"><Icon name="capture" :size="17"/>{{captureBusy?'准备截图…':'开始截图'}}<kbd v-if="desktop">{{shortcutLabel(shortcuts.captureShortcut,isMac)}}</kbd></button></div>
     </header>
     <div class="workspace" :inert="actionsBlocked || undefined">
       <nav class="side-rail" aria-label="工作区导航"><div class="rail-top"><button class="rail-button active" title="图片工作台" aria-label="图片工作台" @click="modal=null"><Icon name="image"/></button><button class="rail-button" title="最近图片 · 当前会话" aria-label="最近图片" @click="modal='history'"><Icon name="history"/><i v-if="documents.length"/></button></div><div class="rail-bottom"><span class="local-dot" title="本地处理 · 无上传"/>
@@ -515,17 +541,19 @@ onMounted(async()=>{
                 <section class="settings-section"><h3>界面外观</h3><div class="theme-options"><button v-for="t in themes" :key="t.id" :class="{active:theme===t.id&&!appearance.enabled}" :aria-pressed="theme===t.id&&!appearance.enabled" @click="chooseTheme(t.id)"><span class="theme-dot" :class="`theme-dot-${t.id}`"/>{{t.label}}</button></div></section>
                 <section class="settings-section"><h3>自定义界面配色</h3><label class="field-note"><input v-model="appearance.enabled" type="checkbox"/>启用自己的配色</label><div class="color-pair"><label>起始<input v-model="appearance.from" type="color" aria-label="界面起始颜色"/></label><label>结束<input v-model="appearance.to" type="color" aria-label="界面结束颜色"/></label><input v-model.number="appearance.angle" type="number" min="0" max="360" aria-label="界面渐变方向"/>°</div><p class="field-note">选择预设主题会关闭自定义配色，颜色仍保留。界面外观与导出图片的背景分别设置。</p></section>
               </div>
-              <DesktopSettings :section="modal==='settings'&&(settingsTab==='shortcuts'||settingsTab==='general')?settingsTab:null" @shortcuts="shortcuts=$event">
+              <DesktopSettings :shortcuts-paused="shortcutsPaused" :section="modal==='settings'&&(settingsTab==='shortcuts'||settingsTab==='general')?settingsTab:null" @shortcuts="shortcuts=$event">
                 <template #general><section class="settings-section"><label class="select-line"><span>延时截图</span><select v-model.number="captureDelay" aria-label="延时截图"><option :value="0">立即</option><option :value="3">3 秒</option><option :value="5">5 秒</option><option :value="10">10 秒</option></select></label><p class="field-note">延时只作用于「开始截图」按钮，全局快捷键立即截图。</p><p class="field-note">关闭主窗口会收起到托盘。退出前请先备份会话，再从托盘选择「退出星镜」；Mac 的 ⌘Q 也会检查未备份进度，Dock 菜单退出暂不提供这项保护。</p></section></template>
                 <template #shortcuts><section class="settings-section shortcut-list"><h3>编辑与截图操作</h3><div><span>开始截图</span><kbd>{{shortcutLabel(shortcuts.captureShortcut,isMac)}}</kbd></div><div><span>贴出最近截图原图</span><kbd>{{shortcutLabel(shortcuts.pinShortcut,isMac)}}</kbd></div><div><span>导出图片 / 撤销</span><kbd>⌘ / Ctrl + S / Z</kbd></div><div><span>复制截图 / 取消截图</span><kbd>Enter / Esc</kbd></div><div><span>全屏选区 / 贴图</span><kbd>⌘ / Ctrl + A / T</kbd></div><div><span>复制颜色 / 切换格式</span><kbd>C / 轻按 Shift</kbd></div></section></template>
               </DesktopSettings>
               <div v-show="settingsTab==='about'" id="settings-panel-about" role="tabpanel" aria-labelledby="settings-tab-about" tabindex="0">
-                <section class="settings-section"><h3>关于星镜 {{appVersion}}</h3><p class="field-note">截图按需触发，不监听剪贴板，不上传图片。当前会话最多保留 6 张原图与各自编辑，内存预算 4800 万像素；普通编辑只留在内存，导出、手动备份或安装更新时才写入图片文件。</p><p class="field-note">区域预判结合窗口边界和图片边缘；Mac 已有辅助功能授权时可查询控件边界。选区工具条支持手动逐屏长截图；贴图可双击关闭、右键操作。敏感信息识别仅在点击时使用本地 OCR。macOS 首次截图需要系统屏幕录制权限。</p><button class="button full" @click="modal=null;capturePreview=true">体验区域选择（原创示例）</button></section>
+                <section class="settings-section"><h3>开源与反馈</h3><div class="project-links"><a class="button subtle" :href="projectLinks.repository" target="_blank" rel="noopener noreferrer" @click="visitProject($event, 'repository')"><Icon name="github" :size="18"/>GitHub 仓库</a><a class="button subtle" :href="projectLinks.issues" target="_blank" rel="noopener noreferrer" @click="visitProject($event, 'issues')"><Icon name="help" :size="18"/>反馈问题</a></div><p class="field-note">将在浏览器打开 GitHub。反馈内容公开，上传截图前请遮住私人信息。</p></section>
+                <section class="settings-section"><h3>关于星镜 {{appVersion}}</h3><p class="field-note">截图按需触发，不监听剪贴板，不上传图片。当前会话最多保留 6 张原图与各自编辑，内存预算 4800 万像素；普通编辑只留在内存，导出、手动备份或安装更新时才写入图片文件。</p><p class="field-note">区域预判结合窗口边界和图片边缘；Mac 已有辅助功能授权时可查询控件边界。选区工具条支持自动滚动和手动逐屏长截图，可选竖向或横向；贴图可双击关闭、右键操作。敏感信息识别仅在点击时使用本地 OCR。macOS 首次截图需要系统屏幕录制权限。</p><button class="button full" @click="modal=null;capturePreview=true">体验区域选择（原创示例）</button></section>
+                <section class="settings-section"><details id="capture-help" :open="helpExpanded"><summary>截图操作说明</summary><div class="shortcut-list"><div><span>悬浮预选 / 扩大范围</span><kbd>移动鼠标 / Tab</kbd></div><div><span>自由框选</span><kbd>按住左键拖动</kbd></div><div><span>重新框选</span><kbd>有选区时右键</kbd></div><div><span>复制截图 / 退出截图</span><kbd>Enter / Esc</kbd></div><div><span>复制鼠标处颜色 / 切换格式</span><kbd>C / 轻按 Shift</kbd></div><div><span>横竖辅助线</span><kbd>H 显示或隐藏</kbd></div><div><span>关闭贴图 / 贴图菜单</span><kbd>双击 / 右键</kbd></div></div><p class="field-note">滚动长截图：框选可滚动内容，点击「滚动长截图」，选择竖向或横向后「开始自动滚动」；Esc / 空格暂停。也可自行滚动后点击「采集下一屏」，保留至少三分之一重叠。自动滚动方向相反时勾选「反向滚轮」重试。先完成采集，再标注或美化。</p><p class="field-note">贴图可拖动、滚轮缩放；托盘菜单可统一隐藏、显示或恢复鼠标操作。暂停全局快捷键只作用于本次运行，重启后恢复。</p></details></section>
                 <ShareSettings :disabled="updateBusy||exitPending||privacyBusy"/>
               </div>
             </fieldset>
             <div v-show="settingsTab==='updates'" id="settings-panel-updates" role="tabpanel" aria-labelledby="settings-tab-updates" tabindex="0">
-              <UpdateSettings :disabled="busy||captureBusy||ioPending>0||privacyBusy||exitPending||releasePending" :get-session="getSession" :restore-session="restoreSession" @busy="setUpdateBusy" @status="receiveUpdateStatus" @recovery-available="recoveryAvailable=$event" @backed-up="dirty=false" />
+              <UpdateSettings :check-request="menuUpdateRequest" @check-request-handled="menuUpdateRequest===$event&&(menuUpdateRequest=0)" :disabled="busy||captureBusy||ioPending>0||privacyBusy||exitPending||releasePending" :get-session="getSession" :restore-session="restoreSession" @busy="setUpdateBusy" @status="receiveUpdateStatus" @recovery-available="recoveryAvailable=$event" @backed-up="dirty=false" />
             </div>
           </div>
         </div>

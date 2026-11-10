@@ -1,5 +1,13 @@
 # 星镜验证记录
 
+## 2026-11-10 · GitHub 图标与反馈入口
+
+- 主窗顶栏加入 18px 单色图标 / 32×32 点击区，支持悬停提示、无障碍名称、主题色与键盘焦点；关于页增加仓库与 Issue 文字入口及公开反馈隐私提示。截图浮层、贴图窗口不增加入口。
+- 原生命令 `open_project_link` 先核对主窗，再把 repository / issues 映射为固定公开地址；拒绝任意 URL、文件路径和其他目标。ACL 运行时测试覆盖主窗允许、截图与贴图窗口拒绝；前端测试覆盖浏览器正常导航、桌面参数和错误传播。
+- Node 63 项中 62 通过 / 1 项因本机缺少 minisign 跳过；Rust core 42 项、desktop lib 67 项通过；前端生产构建、cargo check、cargo fmt 检查和 macOS `tauri build --no-bundle` 通过。
+- 浏览器原创空白工作区验证 Enter 打开正确仓库、关于页入口、月白主题与 850px 窄窗。Issue 链接到达 GitHub 登录页，return_to 指向正确的 issues/new，未登录或提交内容。截图在忽略的 `artifacts/github-entry/`；未读取剪贴板或捕获真实桌面。
+- 仅源码和本地构建完成，未安装、提交、推送或发布；未做 Windows / Linux 原生打开浏览器实测。
+
 ## 2026-11-05 · 快捷键录入、占用检测与设置分栏
 
 - 新增按键录入、手动编辑、检测按钮及逐项结果；保存失败保留草稿，截图按钮和帮助仍显示原生有效绑定。录入原有全局键及macOS应用菜单⌘Q时只回传组合；离开录入、切标签、失焦、关闭时清门控。设置齿轮与主题调色盘独立，五个标签为外观、快捷键、通用、更新与恢复、关于；更新组件持续监听，繁忙状态仍锁定到更新标签。
@@ -423,3 +431,29 @@ Homebrew真实安装到仓库忽略的隔离目录；brew info的安装版本、
 - 持久build-override修复后的正常`npm run tauri -- build --bundles app`成功，macOS arm64 app为11.26MiB，严格codesign通过（仍ad-hoc、未公证）。安装源码`1cd1589`，固定入口二进制SHA-256 `064db91b0158ae8e5ae1b271a244e9783173d6532a33a1098d128be5760f1e10`；归档校验后移除本轮构建app副本。安装前UI会话为空，仍手动备份并验证清单字节数/SHA，旧app归档内二进制一致后才退出替换；不自动载入旧图片恢复点。
 - 新进程显示F1/F3预设入口；录屏与辅助功能预检均未通过。仅为Starshot重置ScreenCapture；用户完成系统触控ID/密码验证后，重新添加固定应用的录屏条目，移除并重新添加同一Starshot辅助功能条目。本机macOS27.2将后者显示为“设备控制和数据访问”；未改变其他应用权限。新进程应用内“重新检查截图权限”明确显示录屏及精准控件预选均可用；关闭设置后保留工作台，安装二进制哈希仍一致。更新前后会话均为空，历史恢复点保留，没有自动载入旧图片。没有捕获真实桌面，不能宣称四角系统热角已原生实测。
 - `1cd1589`的[verify运行41991199652](https://github.com/cpython666/starshot/actions/runs/41991199652)最终为cancelled：macOS、Windows的npm test、Rust核心测试及desktop lib tests均通过，release-safety通过；两端安装包构建被取消，Windows后续OCR及升级/卸载检查跳过，不记为双平台安装包构建通过。此次读取未触发或重跑CI。
+
+
+## 分享预览与主按钮悬浮修复（2026-11-10）
+
+- 源码：`src/components/ShareSettings.vue`提供文案和1080×1440原创产品图的内联预览，确认后才调用复制接口；生成/复制错误展示为状态信息，复制失败保留预览，可重试。保存产品图同样先进入预览。`src/styles.css`修正共用主按钮hover，保持主题强调底色及配套文字颜色。
+- 自动检查：`npm test` 60通过、1跳过；`npm run build`通过；Rust无默认特性核心42通过，desktop lib 64通过；`cargo check --locked`、`cargo fmt -- --check`和`git diff --check`通过。
+- 浏览器：ego-browser Chromium真实Vue界面、模拟clipboard写接口，确认预览文案/图片不写剪贴板、显式确认分别写入文案及image/png、图片复制失败保留预览并支持重试。预览图片尺寸1080×1440；悬浮开始截图按钮实测背景rgb(150,121,198)、文字白色，通用hover未覆盖背景。原创宣传图页面截图仅存Git忽略的`artifacts/share-preview-20261110/`。未读取或更改真实剪贴板，未捕获真实桌面。
+- 平台构建：`npm run tauri -- build --bundles app`成功，macOS arm64 app约11.29MiB，未公证；未替换`/Applications/Starshot.app`。本轮未执行Windows构建/原生复制验收，未提交、推送、发布或更新Homebrew。
+
+
+## 托盘菜单补齐（2026-11-10，源码及本机构建）
+
+- 根据用户提供的Snipaste菜单图调整星镜自己的原生菜单，未做竞品二进制逆向。分组及贴图子菜单、贴图显隐/计数、忙与无内容时置灰、基于实际注册的快捷键文字、会话内快捷键暂停/恢复、共享光圈、设置/更新/帮助/关于导航已接入；退出继续走原有备份握手。源码为`src-tauri/src/desktop/tray_menu.rs`及`desktop.rs`、`desktop_settings.rs`，UI接收在`App.vue`、`DesktopSettings.vue`和`UpdateSettings.vue`。
+- 新IPC `take_menu_request`只允许main窗口；ACL测试覆盖main/capture/pin授权差异。导航保存待取请求，监听就绪后消费；检查更新使用一次性确认，普通重新打开设置不重复检查，不自动下载/安装。快捷键暂停真正释放两项注册，保存配置不解除暂停；恢复失败回滚，重启恢复正常注册。新增事务检查覆盖释放、恢复冲突回滚、解除失败回滚和其他注册项保留。
+- 自动检查：`npm test`60通过/1跳过，前端构建通过；Rust核心无默认特性42通过，desktop lib66通过；`cargo check --locked`、`cargo fmt -- --check`和`git diff --check`通过。
+- ego-browser真实Vue/模拟IPC：设置回归6组通过，新增主窗初始化时帮助导航、运行中偏好/关于导航、暂停状态提示不覆盖草稿、每次托盘更新只检查一次及重新开设置不重放；更新与恢复原有7组回归通过。仅原创固定像素，未读取剪贴板或捕获真实桌面；结果在忽略的`artifacts/settings-regression/`与`artifacts/update-regression/`。这些检查不等于原生托盘点击、实际全局注册或窗口显隐验收。
+- macOS arm64平台打包`npm run tauri -- build --bundles app`成功，约11.34MiB，ad-hoc签名、未公证；未执行Windows构建及两平台原生菜单验收，未替换本机日用应用，未提交/推送/发布/Homebrew更新。
+
+## 长截图自动滚动与横向拼接（2026-11-10，工作区）
+
+- 用户要求实现长截图，随后提供QQ界面参考；采用竖向/横向选择、累计预览和最近一屏蓝框，用户参考图未复制进仓库。`CaptureOverlay.vue`显式开始串行自动模式、Esc/空格/按钮暂停，并保留手动补采和完成出口；`ScrollCapturePanel.vue`按380×540布局等比预览，追加后方向锁定。快捷键只在控制窗有焦点时有效，隐藏采样时须等其恢复；在途暂停完成当前一次采集后停止。
+- 后端`desktop.rs`在原会话/选区/显示器及原窗口复核后调用按平台编译的`desktop/scroll_input.rs`，再做有界稳定采样。macOS为CoreGraphics事件及既有权限预检，Windows为有超时的窗口滚轮消息；不主动改权限或滚轮设置。画面未变、重叠不足、持续变化、目标失效或资源上限都停止调度，原图/锚点/屏数保留。横向旋转进入原拼接算法，预览和所有导出出口还原，详见[长截图说明](scroll-capture.md)。
+- 当前工作区自动检查：`npm test`62通过/1项minisign缺失跳过，`npm run build`通过；Rust无默认特性43通过，desktop lib70通过；`cargo check --locked`、`cargo fmt -- --check`、`git diff --check`通过。新增横向精确像素/去重/反向拒绝、Retina/负坐标中心映射、最前目标及Windows原生身份检查用例；这些是在macOS运行的纯逻辑检查，不代表Windows代码已原生编译。
+- ego-browser真实Chromium/Vue/Canvas/Worker与模拟IPC：截图回归11组通过，包含自动串行推进、在途Esc暂停后无后续调用、重复帧与失败停止、竖横方向锁定/参数、反向滚轮选项、预览蓝框及布局、保存取消和完成出口；详情/帮助回归13组通过。截图仅原创固定像素，产物位于Git忽略的`artifacts/capture-toolbar/`及`artifacts/starclip-details-20261029/`，未读真实剪贴板或捕获真实桌面。
+- macOS原生输入：`tests/macos-scroll-fixture.swift`创建原创AppKit双向滚动窗口，`macos-scroll-smoke.rs`核实子进程PID与原窗口几何后调用生产滚动函数，显式忽略测试实跑1项通过；本机使用`STARSHOT_SCROLL_REVERSE=1`，收到夹具竖向偏移9及后续横向偏移121的回报。仅使用既有事件权限，无截图、剪贴板或第三方内容读取，不覆盖生产采集/稳定检测/拼接/保存全流程。开发过程中曾有方向相反、窗口无法路由或目标复核失败的样本，未计为通过；最终保留反向输入校正和目标保护，不把本机方向结果推广到所有设置。
+- 平台：`npm run tauri -- build --bundles app`成功，macOS arm64 `Starshot.app`约11.37MiB，ad-hoc签名且`codesign --verify --deep --strict`通过，未公证。未执行本轮Windows构建/原生输入及双平台真实生产截图矩阵，未替换日用应用、提交、推送、发行或更新Homebrew。向上/向左反向拼接、复杂固定页眉/动态内容及长时间稳定性仍保留为限制。

@@ -184,28 +184,36 @@ pub fn save(directory: &Path, settings: &DesktopSettings) -> Result<()> {
 pub fn replace_shortcuts(
     old: &DesktopSettings,
     next: &DesktopSettings,
-    mut binding: impl FnMut(Shortcut, bool) -> Result<bool>,
+    binding: impl FnMut(Shortcut, bool) -> Result<bool>,
     persist: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
     let previous = old.shortcuts()?;
     let replacement = next.shortcuts()?;
+    replace_bindings(&previous, &replacement, binding, persist)
+}
+
+// Also used for a session-only pause/resume; an empty replacement releases our keys.
+pub fn replace_bindings(
+    previous: &[Shortcut],
+    replacement: &[Shortcut],
+    mut binding: impl FnMut(Shortcut, bool) -> Result<bool>,
+    persist: impl FnOnce() -> Result<()>,
+) -> Result<()> {
     let mut removed = Vec::new();
     let mut added = Vec::new();
     let result = (|| {
-        for (index, shortcut) in previous.into_iter().enumerate() {
+        for &shortcut in previous {
             // Some platform APIs can change their bookkeeping before reporting
             // an unregister failure, so also roll back the attempted binding.
             removed.push(shortcut);
-            if !binding(shortcut, false).map_err(|e| {
-                format!("解除{}快捷键 {shortcut} 失败：{e}", ["截图", "贴图"][index])
-            })? {
+            if !binding(shortcut, false).map_err(|e| format!("解除快捷键 {shortcut} 失败：{e}"))?
+            {
                 removed.pop();
             }
         }
-        for (index, shortcut) in replacement.into_iter().enumerate() {
-            if binding(shortcut, true).map_err(|e| {
-                format!("设置{}快捷键 {shortcut} 失败：{e}", ["截图", "贴图"][index])
-            })? {
+        for &shortcut in replacement {
+            if binding(shortcut, true).map_err(|e| format!("设置快捷键 {shortcut} 失败：{e}"))?
+            {
                 added.push(shortcut);
             }
         }
@@ -260,6 +268,71 @@ pub fn update_startup(
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn pause_and_resume_release_only_our_keys_and_rollback_conflicts() {
+        let keys = DesktopSettings::default().shortcuts().unwrap();
+        let unrelated: Shortcut = "Control+Alt+F12".parse().unwrap();
+        let mut active = HashSet::from([keys[0].id(), keys[1].id(), unrelated.id()]);
+        let change = |active: &mut HashSet<_>, key: Shortcut, register| {
+            Ok(if register {
+                active.insert(key.id())
+            } else {
+                active.remove(&key.id())
+            })
+        };
+        replace_bindings(
+            &keys,
+            &[],
+            |key, register| change(&mut active, key, register),
+            || Ok(()),
+        )
+        .unwrap();
+        assert_eq!(active, HashSet::from([unrelated.id()]));
+        let error = replace_bindings(
+            &[],
+            &keys,
+            |key, register| {
+                if register && key == keys[1] {
+                    return Err("occupied".into());
+                }
+                change(&mut active, key, register)
+            },
+            || Ok(()),
+        )
+        .unwrap_err();
+        assert!(error.contains("occupied"));
+        assert_eq!(active, HashSet::from([unrelated.id()]));
+        replace_bindings(
+            &[],
+            &keys,
+            |key, register| change(&mut active, key, register),
+            || Ok(()),
+        )
+        .unwrap();
+        assert_eq!(
+            active,
+            HashSet::from([keys[0].id(), keys[1].id(), unrelated.id()])
+        );
+        let mut failed = false;
+        assert!(replace_bindings(
+            &keys,
+            &[],
+            |key, register| {
+                if !register && key == keys[1] && !failed {
+                    failed = true;
+                    return Err("cannot release".into());
+                }
+                change(&mut active, key, register)
+            },
+            || Ok(())
+        )
+        .is_err());
+        assert_eq!(
+            active,
+            HashSet::from([keys[0].id(), keys[1].id(), unrelated.id()])
+        );
+    }
 
     #[test]
     fn shortcut_checks_preserve_current_bindings_and_release_only_the_probe() {
@@ -366,7 +439,7 @@ mod tests {
             );
             let error = result.unwrap_err();
             if fail_registration {
-                assert!(error.contains("设置贴图快捷键"));
+                assert!(error.contains("设置快捷键"));
                 assert!(error.contains(&next.shortcuts().unwrap()[1].to_string()));
             }
             assert_eq!(active, previous);

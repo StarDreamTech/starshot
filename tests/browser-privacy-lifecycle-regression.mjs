@@ -17,6 +17,7 @@ const source='('+function(version){
     m.calls.push({command,args});
     if(command==='plugin:event|listen'){listeners.set(++id,args);return id}
     if(command==='plugin:event|unlisten'){listeners.delete(args.eventId);return}
+    if(command==='take_menu_request')return null;
     if(command==='get_current_image')return null;
     if(command==='get_app_status')return {captureAvailable:true};
     if(command==='get_desktop_settings')return {captureShortcut:'CommandOrControl+Shift+2',pinShortcut:'CommandOrControl+Alt+3',startInTray:false,autostart:false};

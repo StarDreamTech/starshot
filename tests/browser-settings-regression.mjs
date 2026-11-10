@@ -18,7 +18,7 @@ const source = '(' + function (version) {
   const callbacks = new Map(), listeners = new Map(); let id = 0;
   const clone = value => JSON.parse(JSON.stringify(value));
   const mock = window._settingsMock = {
-    calls: [], unexpected: [], state: null, recording: false, failSave: false, holdCheck: false, nextChecks: null,
+    calls: [], unexpected: [], state: null, menuRequest: 'help', recording: false, failSave: false, holdCheck: false, nextChecks: null,
     settings: { captureShortcut: 'CommandOrControl+Shift+7', pinShortcut: 'CommandOrControl+Alt+8', startInTray: false, autostart: false, pinHalo: true },
   };
   mock.emit = (event, payload) => {
@@ -32,6 +32,8 @@ const source = '(' + function (version) {
       if (command === 'plugin:event|listen') { listeners.set(++id, args); return id; }
       if (command === 'plugin:event|unlisten') { listeners.delete(args.eventId); return; }
       if (command === 'get_current_image' || command === 'take_pending_pin_edit') return null;
+      if (command === 'take_menu_request') { const request = mock.menuRequest || null; mock.menuRequest = null; return request; }
+      if (command === 'check_starshot_update') return { revision: 1, currentVersion: version, configured: true, phase: 'up-to-date', downloadReady: false, confirmationPending: false, downloaded: 0 };
       if (command === 'get_app_status') return { platform: 'macos', captureAvailable: true, elementDetection: true };
       if (command === 'get_desktop_settings') return clone(mock.settings);
       if (command === 'set_desktop_settings') {
@@ -107,6 +109,30 @@ const waitStopped = () => wait(() => !window._settingsMock.recording && !documen
 try {
   await page.goto('http://127.0.0.1:1430');
   await wait(() => window._settingsMock?.state && document.getElementById('shortcut-captureShortcut')?.value === 'CommandOrControl+Shift+7');
+  await wait(() => document.getElementById('capture-help')?.open && document.getElementById('settings-tab-about')?.getAttribute('aria-selected') === 'true');
+  await page.evaluate(() => { document.getElementById('capture-help').open = false; window._settingsMock.menuRequest = 'help'; window._settingsMock.emit('menu-requested'); });
+  await wait(() => document.getElementById('capture-help')?.open);
+  await click('button[aria-label="关闭弹窗"]');
+  await page.evaluate(() => { window._settingsMock.menuRequest = 'settings'; window._settingsMock.emit('menu-requested'); });
+  await wait(() => document.getElementById('settings-tab-shortcuts')?.getAttribute('aria-selected') === 'true' && !!document.querySelector('.modal-backdrop')?.getClientRects().length);
+  await page.evaluate(() => window._settingsMock.emit('shortcuts-paused', true));
+  await wait(() => document.querySelector('.desktop-settings').textContent.includes('全局快捷键已暂停'));
+  await page.evaluate(() => window._settingsMock.emit('shortcuts-paused', false));
+  await wait(() => !document.querySelector('.desktop-settings').textContent.includes('全局快捷键已暂停'));
+  assert.equal((await read()).capture, 'CommandOrControl+Shift+7');
+  for (const expected of [1, 2]) {
+    await page.evaluate(() => { window._settingsMock.menuRequest = 'updates'; window._settingsMock.emit('menu-requested'); });
+    await page.waitForFunction(expected => window._settingsMock.calls.filter(call => call.command === 'check_starshot_update').length === expected && document.getElementById('settings-tab-updates')?.getAttribute('aria-selected') === 'true', expected, { timeout: 15000 });
+    await click('button[aria-label="关闭弹窗"]');
+    await click('button[aria-label="设置与帮助"]'); await tab('updates');
+    await wait(() => !document.querySelector('.update-settings')?.getAttribute('aria-busy') || document.querySelector('.update-settings')?.getAttribute('aria-busy') === 'false');
+    assert.equal(await page.evaluate(() => window._settingsMock.calls.filter(call => call.command === 'check_starshot_update').length), expected);
+  }
+  await page.evaluate(() => { window._settingsMock.menuRequest = 'about'; window._settingsMock.emit('menu-requested'); });
+  await wait(() => document.getElementById('settings-tab-about')?.getAttribute('aria-selected') === 'true' && !document.getElementById('capture-help')?.open);
+  assert.deepEqual(await page.evaluate(() => window._settingsMock.unexpected), []);
+  results.push({ name: 'cold-start tray help request and live settings/about routes arrive; pause status preserves drafts; update request checks once without replay on reopen', pass: true });
+  await click('button[aria-label="关闭弹窗"]');
   await click('button[aria-label="设置与帮助"]');
   assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('.settings-tabs [role="tab"]')].map(el => el.textContent.trim())), ['外观', '快捷键', '通用', '更新与恢复', '关于']);
   for (const name of ['appearance', 'shortcuts', 'general', 'updates', 'about']) {

@@ -6,12 +6,14 @@ import type { RecoveryPoint, UpdateStatus } from '../update-api';
 import { downloadProgress, fileSize, updateInProgress, updateNeedsRestart, updatePhaseText, updateCanInstall, updateIsReady } from '../update-state';
 import { restoreWithBackup } from '../session';
 
-const props = defineProps<{ disabled?: boolean; getSession: () => Promise<string>; restoreSession: (serialized: string) => Promise<void> }>();
-const emit = defineEmits<{ busy: [value: boolean]; status: [value: UpdateStatus]; 'backed-up': []; 'recovery-available': [point: RecoveryPoint | null] }>();
+const props = defineProps<{ checkRequest?: number; disabled?: boolean; getSession: () => Promise<string>; restoreSession: (serialized: string) => Promise<void> }>();
+const emit = defineEmits<{ busy: [value: boolean]; status: [value: UpdateStatus]; 'backed-up': []; 'recovery-available': [point: RecoveryPoint | null]; 'check-request-handled': [request: number] }>();
 const status = ref(initialUpdateStatus()), statusLoaded = ref(false);
 const storage = ref<{recoveryBytes:number;applicationBytes:number;totalBytes:number}|null>(null), deleteSelected = ref<RecoveryPoint|null>(null);
 const points = ref<RecoveryPoint[]>([]), pointsLoaded = ref(false);
 const operation = ref<'load' | 'check' | 'download' | 'confirm' | 'install' | 'snapshot' | 'restore' | 'restart' | 'delete' | null>(null);
+const menuReady = ref(false);
+let handledCheckRequest = 0;
 const error = ref(''), recoveryError = ref(''), notice = ref('');
 const installVersion = ref<string | null>(null), restoreSelected = ref<RecoveryPoint | null>(null);
 const confirmation = ref<HTMLElement>(), installDialog = ref<HTMLDialogElement>();
@@ -154,7 +156,13 @@ function restart() {
     catch (reason) { throw Error(`重启未完成，请再次点击「重试重启」。${message(reason)}`); }
   });
 }
-onMounted(() => { if (updateDesktopAvailable) void refresh(); });
+watch([() => props.checkRequest, menuReady, blocked, confirming], ([request]) => {
+  if (!request || request <= handledCheckRequest || !menuReady.value || blocked.value || confirming.value) return;
+  handledCheckRequest = request;
+  emit('check-request-handled', request);
+  void check();
+}, { flush: 'post' });
+onMounted(async () => { if (updateDesktopAvailable) await refresh(); menuReady.value = true; });
 watch(() => props.disabled, (disabled, previous) => { if (!disabled && previous && !statusLoaded.value && updateDesktopAvailable) void refresh(); });
 onBeforeUnmount(() => { disposed = true; installDialog.value?.close(); monitor.dispose(); emit('busy', false); });
 </script>

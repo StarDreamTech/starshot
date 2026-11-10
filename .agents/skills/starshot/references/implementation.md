@@ -4,6 +4,7 @@
 
 | 入口 | 职责 |
 | --- | --- |
+| `src/project-links.ts`、`src/App.vue`、`src-tauri/src/desktop.rs::open_project_link` | 主窗右上角 GitHub 图标和关于页仓库 / Issue 链接；浏览器安全新标签，桌面仅主窗可调用固定目标白名单，不接受任意 URL、文件或命令；未新增依赖或 Star 数请求。2026-11-10 验证见 `docs/verification.md`，未替换日用应用 |
 | `src/App.vue` | 主编辑器、原图与标注、美化偏好、撤销/重做、最近会话、导入/导出。`?view=capture` / `?view=pin` 分别挂载独立界面 |
 | `src/editor.ts` | 预览和PNG/JPEG共用Canvas管线；标注原图坐标，裁剪只改变可见窗口；马赛克实际替换像素 |
 | `src/{privacy.ts,objects.ts,preferences.ts,share.ts}` | 本地敏感规则、对象/贴纸预算、非图片偏好与原创宣传图；OCR原文不存入候选状态 |
@@ -14,12 +15,21 @@
 | `src/components/DesktopSettings.vue` / `src/shortcuts.ts` | 桌面设置草稿、快捷键录入/可读显示/占用检测；有效绑定提示与草稿分离 |
 | `src/components/ScrollCapturePanel.vue` / `src-tauri/src/scrolling.rs` | 手动逐屏采集控制面板与纯像素纵向重叠拼接；原生采集/生命周期在desktop.rs |
 | `src-tauri/src/desktop.rs` | xcap捕获、窗口候选、多显示器覆盖层、快捷键、托盘、复制/保存/贴图和IPC |
+| `src-tauri/src/desktop/tray_menu.rs` / `src/components/ShareSettings.vue` | 原生托盘分组与状态、批量贴图操作和快捷键暂停；分享文案/原创产品图预览及确认复制 |
 | `src-tauri/src/capture_platform.rs` | 仅macOS桌面编译的临时截图presentation与窗口层级/行为；主线程保存与恢复，macOS27+抑制屏幕热角 |
 | `src-tauri/src/window_regions.rs` / `window_regions/windows.rs` | macOS CoreGraphics几何快照与已有授权下的AX位置/尺寸；Windows窗口身份快照与受限UIA helper；初始鼠标和原生控件坐标转换 |
 | `src-tauri/src/imaging.rs` | 图片解码/上限、裁切参数、坐标转换、同目录临时文件原子替换 |
 | `src-tauri/{build.rs,permissions,capabilities}` | 主编辑器/捕获/贴图三类窗口最小权限；lib.rs测试生成后的ACL |
 | `.github/workflows/verify.yml` | macOS Apple Silicon app/DMG与Windows x64 NSIS检查和构建；配置存在不代表远端运行通过 |
 | `src/{update-api.ts,session.ts}` 与 `src-tauri/src/{updater.rs,recovery.rs}` | 签名更新与完整会话恢复；协议、签名和失败边界见 [更新要点](releases.md) |
+
+## 2026-11-10分享预览与托盘菜单
+
+- 2026-11-10托盘菜单入口在`src-tauri/src/desktop/tray_menu.rs`，由`desktop.rs`装配：截图/最近原图/全部贴图显隐优先，贴图管理子菜单含恢复鼠标操作、关闭全部和共享光圈开关，另有暂停全局快捷键、编辑器、偏好、检查更新、操作说明、关于及安全退出。没有截图/贴图、达到12张贴图或忙时对应动作置灰；显隐文案显示贴图数量，隐藏保留窗口和图片。批量关闭仅移除成功销毁项，部分失败保留对应状态并报错。
+- 托盘快捷键提示来自已保存配置及实际本应用注册状态，使用展示文字而不重复注册menu accelerator，避免同一组合键触发两次。暂停状态仅本次运行：复用`desktop_settings::replace_bindings`事务释放本应用两项键，恢复占用失败回滚，保存设置保持暂停；不取消其他注册项。设置页通过`get_app_status.shortcutsPaused`及`shortcuts-paused`事件显示状态。光圈沿用持久化成功后广播`pin-halo`，不覆盖设置草稿。
+- 托盘导航先保存`Context.pending_menu_request`再唤起主窗；`take_menu_request`只授予主窗并消费一次，前端先监听`menu-requested`，初始化后再读取，覆盖主窗尚未创建/已释放的情况。检查更新使用一次性请求，等面板初始读取及忙状态结束后检查并确认消费，重新打开设置不重放；只有用户点击菜单才请求检查，不增加启动联网。原生动作/菜单展示待实际桌面验收，当前构建和模拟IPC证据见验证记录。
+
+- 分享入口位于「设置与帮助 → 关于」。2026-11-10源码将文案/图片均改为先展开预览，再显式确认复制；图片保存也从预览进入。`ShareSettings.vue`只生成原创宣传图，预览不写剪贴板；处理期间禁用操作，复制失败保留预览和错误，便于重试。预览沿用设置内容区，不叠加第二层弹窗。`styles.css`主按钮悬浮显式保持主题的强调背景/文字颜色，避免通用button hover覆盖背景导致文字难辨。构建与浏览器验证边界见验证记录；本轮未安装或发行。
 
 ## 必须保持的关系
 
@@ -51,6 +61,8 @@
 - 验证分别检查目标依赖树和真实安装包资源；依赖树解析不等于该平台编译或原生实测。对应依据：[Cargo平台依赖](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#platform-specific-dependencies)、[Tauri平台配置](https://v2.tauri.app/reference/config/#platform-specific-configuration)。
 
 ## 2026-10-29未发布截图交互
+
+下列长截图三项为2026-10-29手动首版历史；2026-11-10工作区已增加主动自动滚动、横向拼接、方向锁定及累计预览/当前屏蓝框，当前操作、原生输入、时序与验证边界统一见[长截图说明](../../../../docs/scroll-capture.md)。
 
 - 普通选区工具条的「滚动长截图」调用`begin_scroll_capture`，不接受已有标注（先长截图，再更多编辑）；选区最小64×64。原覆盖层缩成380×300逻辑控制窗，保留原显示器ID/位置/尺寸/缩放/物理裁切坐标；其余覆盖层释放。前后端释放首屏全屏PNG，保留拼接结果/上一屏及缩略图。
 - 每次用户点击「采集下一屏」才调用`append_scroll_capture`，隐藏控制窗180ms后重读原屏并裁同一选区；不自动滚动、轮询或后台截图。屏幕配置变化、失败、重叠不足保留既有长图；保存取消保留进度，`finish_scroll_capture`复用真实copy/save/pin/edit出口，取消/销毁清理状态。权限仅授予capture窗口，唯一label和operation锁沿用原会话约束。

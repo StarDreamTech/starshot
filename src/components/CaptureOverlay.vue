@@ -12,7 +12,7 @@ type Region = Rect & { label: string }
 type Frame = { dataUrl: string; width: number; height: number; regions: Region[]; scaleFactor: number; regionWarning?: string; pointer?: { x: number; y: number }; elementDetection?: boolean }
 type Handle = 'n' | 's' | 'e' | 'w' | 'nw' | 'ne' | 'sw' | 'se'
 type Action = 'copy' | 'save' | 'pin' | 'edit'
-type ScrollProgress = { width: number; height: number; frames: number; previewDataUrl: string; message: string }
+type ScrollProgress = { width: number; height: number; frames: number; previewDataUrl: string; message: string; unchanged?: boolean; viewportWidth?: number; viewportHeight?: number }
 const emit = defineEmits<{ captured: [image: { dataUrl: string; width: number; height: number; name: string }]; cancel: [] }>()
 const props = withDefaults(defineProps<{ demo?: boolean }>(), { demo: false })
 const desktop = !props.demo && '__TAURI_INTERNALS__' in window
@@ -43,6 +43,10 @@ const hideMagnifier = ref(false)
 const guidesVisible = ref(true)
 const scrolling = ref(false)
 const scrollProgress = shallowRef<ScrollProgress>()
+const autoScrolling = ref(false)
+const scrollDirection = ref<'vertical' | 'horizontal'>('vertical')
+const reverseScroll = ref(false)
+let autoScrollTimer: number | undefined
 const shiftHeld = ref(false)
 const altHeld = ref(false)
 const activeHandle = ref<Handle | 'move' | 'new'>('new')
@@ -114,7 +118,7 @@ const showMagnifier = computed(() => ready.value && !hideMagnifier.value && !bus
 const pixelText = computed(() => colorFormat.value === 'hex' ? pixelColor.value : `rgb(${[1, 3, 5].map(at => parseInt(pixelColor.value.slice(at, at + 2), 16)).join(', ')})`)
 const showGuides = computed(() => ready.value && guidesVisible.value && !hideMagnifier.value && !busy.value && tool.value === 'cursor' && (!selected.value || dragging.value))
 const canStartScroll = computed(() => desktop && validSelection.value && currentRect.value!.width >= 64 && currentRect.value!.height >= 64 && !annotations.value.length)
-const scrollHint = computed(() => !desktop ? '滚动长截图仅桌面版可用' : annotations.value.length ? '先撤销标注再开始长截图，完成后可继续编辑' : !canStartScroll.value ? '长截图选区至少 64 × 64 像素' : '滚动长截图：手动滚动，逐屏采集并拼接')
+const scrollHint = computed(() => !desktop ? '滚动长截图仅桌面版可用' : annotations.value.length ? '先撤销标注再开始长截图，完成后可继续编辑' : !canStartScroll.value ? '长截图选区至少 64 × 64 像素' : '滚动长截图：自动向下滚动拼接，也可手动逐屏采集')
 
 function point(event: PointerEvent) {
   const f = frame.value!
@@ -383,15 +387,43 @@ async function startScroll() {
   } catch (cause) { scrolling.value = false; error.value = String(cause) }
   finally { busy.value = false }
 }
-async function appendScroll() {
+function pauseAutoScroll() {
+  autoScrolling.value = false
+  clearTimeout(autoScrollTimer)
+  status.value = busy.value ? '正在结束本次采集，随后暂停。' : '自动滚动已暂停，当前长图已保留。'
+}
+async function autoScrollStep() {
+  if (!mounted || !autoScrolling.value) return
+  const continued = await appendScroll(true)
+  if (!mounted || !autoScrolling.value) return
+  if (!continued) { autoScrolling.value = false; return }
+  if (scrollProgress.value!.frames >= 100) {
+    pauseAutoScroll(); status.value = '已达到 100 屏上限，请保存当前长图。'; return
+  }
+  autoScrollTimer = window.setTimeout(() => void autoScrollStep(), 650)
+}
+function toggleAutoScroll() {
+  if (autoScrolling.value) { pauseAutoScroll(); return }
   if (busy.value || !scrollProgress.value) return
+  autoScrolling.value = true
+  void autoScrollStep()
+}
+async function appendScroll(automatic = false): Promise<boolean> {
+  if (busy.value || !scrollProgress.value || (!automatic && autoScrolling.value)) return false
+  const previousFrames = scrollProgress.value.frames
   busy.value = true; error.value = ''; status.value = ''
-  try { scrollProgress.value = await invoke<ScrollProgress>('append_scroll_capture') }
-  catch (cause) { error.value = String(cause) }
+  try {
+    const progress = await invoke<ScrollProgress>('append_scroll_capture', { automatic, direction: scrollDirection.value, reverse: reverseScroll.value })
+    if (!mounted) return false
+    scrollProgress.value = progress
+    if (automatic && !autoScrolling.value) status.value = '自动滚动已暂停，当前长图已保留。'
+    return !progress.unchanged && progress.frames > previousFrames
+  }
+  catch (cause) { if (mounted) error.value = String(cause); return false }
   finally { busy.value = false }
 }
 async function finishScroll(action: Action) {
-  if (busy.value || !scrollProgress.value) return
+  if (busy.value || autoScrolling.value || !scrollProgress.value) return
   busy.value = true; error.value = ''; status.value = ''
   try {
     const result = await invoke<{ completed: boolean; path?: string }>('finish_scroll_capture', { action })
@@ -400,6 +432,7 @@ async function finishScroll(action: Action) {
   finally { busy.value = false }
 }
 async function cancel() {
+  if (autoScrolling.value) { pauseAutoScroll(); return }
   if (busy.value) return
   stopElementQuery(); abortPointer(); busy.value = true
   try { if (desktop) await invoke('cancel_capture'); else emit('cancel') }
@@ -407,6 +440,9 @@ async function cancel() {
   finally { busy.value = false }
 }
 function keydown(event: KeyboardEvent) {
+  if (autoScrolling.value && (event.key === 'Escape' || event.key === ' ')) {
+    event.preventDefault(); pauseAutoScroll(); return
+  }
   if (busy.value) { shiftTap = false; event.preventDefault(); return }
   if (event.key !== 'Shift') shiftTap = false
   const input = event.target instanceof HTMLElement && event.target.closest('input,textarea,select')
@@ -592,6 +628,7 @@ onMounted(async () => {
   }
 })
 onBeforeUnmount(() => {
+  autoScrolling.value = false; clearTimeout(autoScrollTimer)
   mounted = false; regionWorker?.terminate(); toolbarObserver?.disconnect()
   stopElementQuery(); cancelAnimationFrame(moveRequest); cancelAnimationFrame(drawRequest); clearTimeout(probeRequest)
   window.removeEventListener('keydown', keydown); window.removeEventListener('keyup', keyup); window.removeEventListener('resize', resize)
@@ -601,7 +638,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <ScrollCapturePanel v-if="scrolling" :progress="scrollProgress" :busy="busy" :error="error" :status="status" @append="appendScroll" @finish="finishScroll" @cancel="cancel" />
+  <ScrollCapturePanel v-if="scrolling" v-model:direction="scrollDirection" v-model:reverse="reverseScroll" :progress="scrollProgress" :automatic="autoScrolling" :busy="busy" :error="error" :status="status" @append="appendScroll" @toggle-auto="toggleAutoScroll" @finish="finishScroll" @cancel="cancel" />
   <main v-else ref="stage" class="capture-stage" aria-label="截图区域选择" :class="{ 'is-dragging': dragging }" @pointerenter="move" @pointermove="move" @pointerleave="leave" @pointerdown="begin($event)" @pointerup="end" @pointercancel="abortPointer" @contextmenu.prevent="rightClick">
     <img v-if="frame" ref="captureImage" class="capture-source" :src="frame.dataUrl" alt="当前冻结的屏幕画面" draggable="false" />
     <div v-if="!currentRect" class="capture-shade" />

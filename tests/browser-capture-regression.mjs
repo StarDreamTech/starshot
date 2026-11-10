@@ -100,12 +100,14 @@ const source='('+function(){
     }
     if(command==='cancel_capture'||command==='capture_overlay_ready')return;
     if(command==='begin_scroll_capture'||command==='append_scroll_capture'){
+      if(command==='append_scroll_capture'&&m.hold)await new Promise(resolve=>{m.release=resolve});
       if(m.mode==='error')throw Error('fixture: overlap not found');
       if(command==='append_scroll_capture'&&m.mode!=='duplicate')m.scrollFrames++;
-      const c=document.createElement('canvas');c.width=300;c.height=180+(m.scrollFrames-1)*90;
+      const horizontal=args.direction==='horizontal';
+      const c=document.createElement('canvas');c.width=300+(horizontal?(m.scrollFrames-1)*90:0);c.height=180+(horizontal?0:(m.scrollFrames-1)*90);
       const ctx=c.getContext('2d');ctx.fillStyle='#eaf0f6';ctx.fillRect(0,0,c.width,c.height);
       ctx.fillStyle='#16324f';for(let i=0;i<m.scrollFrames;i++)ctx.fillRect(20,20+i*90,260,55);
-      return {width:c.width,height:c.height,frames:m.scrollFrames,previewDataUrl:c.toDataURL('image/png'),message:m.mode==='duplicate'?'画面未变化，已保留当前长截图。':'已采集，请继续滚动或完成。'};
+      return {width:c.width,height:c.height,viewportWidth:300,viewportHeight:180,frames:m.scrollFrames,previewDataUrl:c.toDataURL('image/png'),unchanged:m.mode==='duplicate',message:m.mode==='duplicate'?'画面未变化，已保留当前长截图。':'已采集，请继续滚动或完成。'};
     }
     if(command==='finish_scroll_capture'){
       if(m.mode==='error')throw Error('fixture: save failed');
@@ -162,26 +164,66 @@ try {
   await page.evaluate(()=>{window._captureMock.mode='success'});
   await click('滚动长截图');await wait(()=>!!document.querySelector('.scroll-preview img'));
   assert.equal(await page.evaluate(()=>!!document.querySelector('.capture-stage')),false);
-  await page.cdp('Emulation.setDeviceMetricsOverride',{width:380,height:300,deviceScaleFactor:1,mobile:false});
+  await page.cdp('Emulation.setDeviceMetricsOverride',{width:380,height:540,deviceScaleFactor:1,mobile:false});
   const panelButton = async text => page.evaluate(text=>{const b=[...document.querySelectorAll('.scroll-capture button')].find(b=>b.textContent.trim()===text);if(!b||b.disabled)throw Error('Unavailable '+text);b.click()},text);
-  await panelButton('采集下一屏');await wait(()=>document.querySelector('.scroll-preview').textContent.includes('270'));
+  await panelButton('采集下一屏');await wait(()=>document.querySelector('.scroll-dimensions').textContent.includes('270'));
+  assert.equal(await page.evaluate(()=>document.querySelector('.scroll-directions').disabled),true);
+  assert.ok(await page.evaluate(()=>{const box=document.querySelector('.scroll-current-viewport');return Math.abs(parseFloat(box.style.top)-100/3)<.01&&Math.abs(parseFloat(box.style.height)-200/3)<.01}));
   await page.evaluate(()=>{window._captureMock.mode='duplicate'});await panelButton('采集下一屏');
   await wait(()=>document.querySelector('.scroll-status').textContent.includes('未变化'));
-  assert.ok(await page.evaluate(()=>document.querySelector('.scroll-preview').textContent.includes('已采集 2 屏')));
+  assert.ok(await page.evaluate(()=>document.querySelector('.scroll-dimensions').textContent.includes('已采集 2 屏')));
   await page.evaluate(()=>{window._captureMock.mode='error'});await panelButton('采集下一屏');
   await wait(()=>document.querySelector('[role=alert]')?.textContent.includes('overlap not found'));
-  assert.ok(await page.evaluate(()=>document.querySelector('.scroll-preview').textContent.includes('270')));
+  assert.ok(await page.evaluate(()=>document.querySelector('.scroll-dimensions').textContent.includes('270')));
   await page.evaluate(()=>{window._captureMock.mode='cancel'});await panelButton('保存');
   await wait(()=>document.querySelector('.scroll-status').textContent.includes('已取消保存'));
   await page.screenshot({path:dir+'/scroll-panel.png'});
   assert.equal(await page.evaluate(()=>{const p=document.querySelector('.scroll-capture');return p.scrollHeight>p.clientHeight}),false);
+  await page.evaluate(()=>{window._captureMock.mode='success';window._captureMock.hold=true;window._captureMock.release=null});
+  await panelButton('开始自动滚动');await wait(()=>!!window._captureMock.release);
+  assert.equal(await page.evaluate(()=>window._captureMock.calls.at(-1).args.automatic),true);
+  assert.equal(await page.evaluate(()=>[...document.querySelectorAll('.scroll-capture footer button')].every(button=>button.disabled)),true);
+  await key('Escape');
+  assert.ok(await page.evaluate(()=>document.querySelector('.scroll-status').textContent.includes('随后暂停')));
+  await page.evaluate(()=>{window._captureMock.hold=false;window._captureMock.release()});
+  await wait(()=>document.querySelector('.scroll-status').textContent.includes('自动滚动已暂停'));
+  const pausedCount=await page.evaluate(()=>window._captureMock.calls.length);
+  await page.evaluate(()=>new Promise(resolve=>setTimeout(resolve,800)));
+  assert.equal(await page.evaluate(()=>window._captureMock.calls.length),pausedCount);
+  await page.evaluate(()=>{window._captureMock.mode='duplicate'});
+  await panelButton('开始自动滚动');await wait(()=>[...document.querySelectorAll('.scroll-capture button')].some(button=>button.textContent==='开始自动滚动'));
+  assert.ok(await page.evaluate(()=>document.querySelector('.scroll-status').textContent.includes('未变化')));
+  await page.evaluate(()=>{window._captureMock.mode='error'});
+  await panelButton('开始自动滚动');await wait(()=>document.querySelector('[role=alert]')?.textContent.includes('overlap not found'));
+  assert.ok(await page.evaluate(()=>[...document.querySelectorAll('.scroll-capture button')].some(button=>button.textContent==='开始自动滚动')));
+  results.push({name:'automatic scroll opts in via native IPC; Esc pauses pending work without another capture; duplicate and failure stop, preserving preview and finish actions',pass:true});
   await page.evaluate(()=>{window._captureMock.mode='success'});
   for(const [label,action] of [['更多编辑','edit'],['贴到桌面','pin'],['复制完成','copy']]){
     await panelButton(label);await wait(()=>!document.querySelector('.scroll-capture').getAttribute('aria-busy')||document.querySelector('.scroll-capture').getAttribute('aria-busy')==='false');
     assert.equal(await page.evaluate(()=>window._captureMock.calls.at(-1).args.action),action);
   }
   await key('Escape');assert.equal(await page.evaluate(()=>window._captureMock.calls.at(-1).command),'cancel_capture');
-  results.push({name:'mock native scroll lifecycle: start rollback, annotation guard, append preview, duplicate/no-overlap preservation, save cancel, actions and Esc; 380x300 panel fits',pass:true});
+  results.push({name:'mock native scroll lifecycle: start rollback, annotation guard, append preview with current-screen outline and direction lock, duplicate/no-overlap preservation, save cancel, actions and Esc; 380x540 panel fits',pass:true});
+  await page.cdp('Emulation.clearDeviceMetricsOverride');
+  await page.goto('http://127.0.0.1:1430/?view=capture');
+  await wait(()=>document.querySelector('.capture-stage')?.__vueParentComponent.setupState.ready);
+  await gesture({x:150,y:130},{x:449,y:309},true);
+  await page.evaluate(()=>{window._captureMock.mode='success'});
+  await click('滚动长截图');await wait(()=>!!document.querySelector('.scroll-preview img'));
+  await page.cdp('Emulation.setDeviceMetricsOverride',{width:380,height:540,deviceScaleFactor:1,mobile:false});
+  await page.evaluate(()=>{const direction=document.querySelector('input[value="horizontal"]');direction.click();document.querySelector('.reverse-scroll input').click()});
+  await panelButton('开始自动滚动');
+  await wait(()=>document.querySelector('.scroll-dimensions').textContent.includes('480 × 180'));
+  await panelButton('暂停自动滚动');
+  assert.equal(await page.evaluate(()=>window._captureMock.calls.at(-1).args.direction),'horizontal');
+  assert.equal(await page.evaluate(()=>window._captureMock.calls.at(-1).args.reverse),true);
+  assert.ok(await page.evaluate(()=>{const box=document.querySelector('.scroll-current-viewport');return parseFloat(box.style.left)>0&&parseFloat(box.style.width)<100&&box.style.height==='100%'}));
+  assert.ok(await page.evaluate(()=>{const preview=document.querySelector('.scroll-preview').getBoundingClientRect(),sheet=document.querySelector('.scroll-sheet').getBoundingClientRect();return sheet.left>=preview.left&&sheet.right<=preview.right+1&&sheet.top>=preview.top&&sheet.bottom<=preview.bottom+1}));
+  await page.screenshot({path:dir+'/scroll-horizontal.png'});
+  const stopped=await page.evaluate(()=>window._captureMock.calls.length);
+  await page.evaluate(()=>new Promise(resolve=>setTimeout(resolve,800)));
+  assert.equal(await page.evaluate(()=>window._captureMock.calls.length),stopped);
+  results.push({name:'horizontal auto scroll repeats serially, forwards reverse-wheel choice, then pauses; current-screen blue outline and full preview fit the panel',pass:true});
   await page.cdp('Emulation.clearDeviceMetricsOverride');
 } finally {await page.cdp('Page.removeScriptToEvaluateOnNewDocument',{identifier:preload.identifier});}
 await fs.writeFile(dir+'/results.json',JSON.stringify({layer:'real Chromium Vue/Canvas/worker plus mocked native command routing; no OS capture or clipboard',results},null,2));

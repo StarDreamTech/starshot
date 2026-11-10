@@ -1,7 +1,7 @@
 use crate::desktop_settings::{self, DesktopSettings, DesktopSettingsStatus};
 use crate::imaging::{self, ImagePayload, Rect};
 use crate::recovery::{self, RecoveredSession, RecoveryPoint, RecoveryStorage};
-use crate::scrolling::ScrollImage;
+use crate::scrolling::{ScrollDirection, ScrollImage};
 use crate::updater::{self, UpdateStatus, Updates};
 use image::{DynamicImage, ImageFormat};
 use serde::{Deserialize, Serialize};
@@ -26,6 +26,9 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_updater::UpdaterExt;
 
 type Result<T> = std::result::Result<T, String>;
+
+mod scroll_input;
+mod tray_menu;
 
 #[cfg(all(feature = "windows-uia-smoke", target_os = "windows"))]
 pub(crate) mod windows_integration;
@@ -128,6 +131,8 @@ struct ScrollCapture {
     monitor: CaptureMonitor,
     rect: Rect,
     stitch: ScrollImage,
+    target: Option<crate::window_regions::WindowBounds>,
+    direction: ScrollDirection,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -137,17 +142,39 @@ struct ScrollProgress {
     frames: u32,
     preview_data_url: String,
     message: String,
+    unchanged: bool,
+    viewport_width: u32,
+    viewport_height: u32,
+    direction: ScrollDirection,
 }
 impl ScrollCapture {
     fn progress(&self, message: &str) -> Result<ScrollProgress> {
         let image = self.stitch.image();
-        let preview = image::imageops::thumbnail(image, 240, 600);
+        let horizontal = self.direction == ScrollDirection::Horizontal;
+        let preview = image::imageops::thumbnail(
+            image,
+            if horizontal { 600 } else { 240 },
+            if horizontal { 240 } else { 600 },
+        );
+        let preview = self.direction.finish(&preview);
         Ok(ScrollProgress {
-            width: image.width(),
-            height: image.height(),
+            width: if horizontal {
+                image.height()
+            } else {
+                image.width()
+            },
+            height: if horizontal {
+                image.width()
+            } else {
+                image.height()
+            },
             frames: self.stitch.frames(),
             preview_data_url: imaging::png_data_url(&DynamicImage::ImageRgba8(preview))?,
             message: message.into(),
+            unchanged: false,
+            viewport_width: self.rect.width,
+            viewport_height: self.rect.height,
+            direction: self.direction,
         })
     }
 }
@@ -178,6 +205,8 @@ struct Context {
     shortcut_error: Mutex<Option<String>>,
     shortcut_probes: Mutex<HashSet<u32>>,
     shortcut_recording: AtomicBool,
+    shortcuts_paused: AtomicBool,
+    pending_menu_request: Mutex<Option<String>>,
     settings: Mutex<DesktopSettings>,
     editor: Mutex<EditorLifecycle>,
     last_saved: Mutex<Option<std::path::PathBuf>>,
@@ -282,6 +311,7 @@ fn clear_capture(app: &AppHandle) -> Result<()> {
     }
     #[cfg(target_os = "macos")]
     restored?;
+    tray_menu::refresh(app);
     Ok(())
 }
 
@@ -497,6 +527,7 @@ fn begin_capture(app: &AppHandle) -> Result<()> {
             }
         }
         watch_capture_startup(app.clone(), labels);
+        tray_menu::refresh(app);
         Ok(())
     })();
     if result.is_err() {
@@ -858,7 +889,7 @@ fn scroll_panel_bounds(monitor: CaptureMonitor, rect: Rect) -> (f64, f64, f64, f
         f64::from(monitor.height) / monitor.scale,
     );
     let width = 380.0_f64.min((sw - 16.0).max(1.0));
-    let height = 300.0_f64.min((sh - 32.0).max(1.0));
+    let height = 540.0_f64.min((sh - 32.0).max(1.0));
     let x = f64::from(rect.x) / f64::from(monitor.image_width) * sw;
     let y = f64::from(rect.y) / f64::from(monitor.image_height) * sh;
     let right = f64::from(rect.x + rect.width) / f64::from(monitor.image_width) * sw;
@@ -876,6 +907,65 @@ fn scroll_panel_bounds(monitor: CaptureMonitor, rect: Rect) -> (f64, f64, f64, f
         })
         .unwrap_or(((sw - width - 8.0).max(0.0), (sh - height - 16.0).max(0.0)));
     (px, py, width, height)
+}
+
+fn scroll_point(monitor: CaptureMonitor, rect: Rect) -> (i32, i32) {
+    (
+        (f64::from(monitor.x)
+            + (f64::from(rect.x) + f64::from(rect.width) / 2.0) / f64::from(monitor.image_width)
+                * f64::from(monitor.width))
+        .round() as i32,
+        (f64::from(monitor.y)
+            + (f64::from(rect.y) + f64::from(rect.height) / 2.0) / f64::from(monitor.image_height)
+                * f64::from(monitor.height))
+        .round() as i32,
+    )
+}
+
+fn scroll_monitor(expected: CaptureMonitor) -> Result<xcap::Monitor> {
+    let monitor = xcap::Monitor::all()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|monitor| monitor.id().ok() == Some(expected.id))
+        .ok_or("原显示器已断开，请保存已有长图后重新截图")?;
+    let current = CaptureMonitor {
+        id: expected.id,
+        x: monitor.x().map_err(|error| error.to_string())?,
+        y: monitor.y().map_err(|error| error.to_string())?,
+        width: monitor.width().map_err(|error| error.to_string())?,
+        height: monitor.height().map_err(|error| error.to_string())?,
+        scale: f64::from(monitor.scale_factor().map_err(|error| error.to_string())?),
+        image_width: expected.image_width,
+        image_height: expected.image_height,
+    };
+    if current != expected {
+        return Err("显示器位置、分辨率或缩放已变化，已保留长图，请保存后重新截图".into());
+    }
+    Ok(monitor)
+}
+
+fn capture_scroll_view(expected: CaptureMonitor, rect: Rect) -> Result<image::RgbaImage> {
+    let image = scroll_monitor(expected)?
+        .capture_image()
+        .map_err(|error| format!("采集失败，已保留长图：{error}"))?;
+    if image.dimensions() != (expected.image_width, expected.image_height) {
+        return Err("采集画面尺寸已变化，已保留长图，请保存后重新截图".into());
+    }
+    rect.validate(image.width(), image.height())?;
+    Ok(image::imageops::crop_imm(&image, rect.x, rect.y, rect.width, rect.height).to_image())
+}
+
+fn validate_scroll_target(
+    expected: crate::window_regions::WindowBounds,
+    point: (i32, i32),
+) -> Result<()> {
+    let windows = crate::window_regions::snapshot(std::process::id())?;
+    if !scroll_input::target_at(&windows, point)
+        .is_some_and(|current| scroll_input::same_target(expected, current))
+    {
+        return Err("原页面已移动、关闭或被遮挡，已暂停自动滚动；当前长图已保留。".into());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -902,10 +992,22 @@ async fn begin_scroll_capture(
                 monitor: frame.monitor,
                 rect,
                 stitch: ScrollImage::new(image)?,
+                direction: ScrollDirection::Vertical,
+                target: {
+                    let point = scroll_point(frame.monitor, rect);
+                    scroll_input::target_at(
+                        &frame
+                            .hosts
+                            .iter()
+                            .map(|host| host.window)
+                            .collect::<Vec<_>>(),
+                        point,
+                    )
+                },
             }
         };
-        let progress = scroll
-            .progress("首屏已保留。请在原页面向下滚动，保留至少三分之一重叠，再点采集下一屏。")?;
+        let progress =
+            scroll.progress("首屏已保留。可开始自动滚动，或自行向下滚动后采集下一屏。")?;
         let peers: Vec<_> = lock(&context.frames)?
             .keys()
             .filter(|key| **key != label)
@@ -982,58 +1084,79 @@ async fn begin_scroll_capture(
 }
 
 #[tauri::command]
-async fn append_scroll_capture(app: AppHandle, window: WebviewWindow) -> Result<ScrollProgress> {
+async fn append_scroll_capture(
+    app: AppHandle,
+    window: WebviewWindow,
+    automatic: Option<bool>,
+    direction: Option<ScrollDirection>,
+    reverse: Option<bool>,
+) -> Result<ScrollProgress> {
     let label = window.label().to_string();
     tauri::async_runtime::spawn_blocking(move || {
         let context = app.state::<Context>();
         let _operation = lock(&context.operation)?;
         context.ensure_not_exiting()?;
         app.state::<Updates>().ensure_idle()?;
-        let (expected, rect) = {
-            let scroll = lock(&context.scroll)?;
+        let (expected, rect, target, direction) = {
+            let mut scroll = lock(&context.scroll)?;
             let scroll = scroll
-                .as_ref()
+                .as_mut()
                 .filter(|scroll| scroll.label == label)
                 .ok_or("长截图会话已结束")?;
-            (scroll.monitor, scroll.rect)
+            let direction = direction.unwrap_or(scroll.direction);
+            if scroll.stitch.frames() >= 100 {
+                return Err("已达到 100 屏上限，请先保存当前长图".into());
+            }
+            if direction != scroll.direction {
+                if scroll.stitch.frames() != 1 {
+                    return Err("已拼接后不能切换方向，请保存当前长图后重新框选".into());
+                }
+                let original = scroll.direction.finish(scroll.stitch.image());
+                let stitch = ScrollImage::new(direction.prepare(original))?;
+                scroll.stitch = stitch;
+                scroll.direction = direction;
+            }
+            (scroll.monitor, scroll.rect, scroll.target, direction)
         };
         if !capture_permission(false) {
             return Err(CAPTURE_PERMISSION_HELP.into());
         }
         window.hide().map_err(|e| e.to_string())?;
-        // Explicit per-click capture: the panel is removed by the compositor before
-        // sampling. There is no automatic scrolling, polling, or background capture.
         std::thread::sleep(Duration::from_millis(180));
         let captured = (|| -> Result<image::RgbaImage> {
-            let monitor = xcap::Monitor::all()
-                .map_err(|e| e.to_string())?
-                .into_iter()
-                .find(|monitor| monitor.id().ok() == Some(expected.id))
-                .ok_or("原显示器已断开，请保存已有长图后重新截图")?;
-            let current = CaptureMonitor {
-                id: expected.id,
-                x: monitor.x().map_err(|e| e.to_string())?,
-                y: monitor.y().map_err(|e| e.to_string())?,
-                width: monitor.width().map_err(|e| e.to_string())?,
-                height: monitor.height().map_err(|e| e.to_string())?,
-                scale: f64::from(monitor.scale_factor().map_err(|e| e.to_string())?),
-                image_width: expected.image_width,
-                image_height: expected.image_height,
-            };
-            if current != expected {
-                return Err("显示器位置、分辨率或缩放已变化，已保留长图，请保存后重新截图".into());
+            if !automatic.unwrap_or(false) {
+                return capture_scroll_view(expected, rect);
             }
-            let image = monitor
-                .capture_image()
-                .map_err(|e| format!("采集失败，已保留长图：{e}"))?;
-            if image.dimensions() != (expected.image_width, expected.image_height) {
-                return Err("采集画面尺寸已变化，已保留长图，请保存后重新截图".into());
+            scroll_monitor(expected)?;
+            let target = target.ok_or("没有可核实的原页面，请自行滚动后点击「采集下一屏」。")?;
+            let point = scroll_point(expected, rect);
+            validate_scroll_target(target, point)?;
+            let distance = (if direction == ScrollDirection::Horizontal {
+                f64::from(rect.width) / f64::from(expected.image_width) * f64::from(expected.width)
+            } else {
+                f64::from(rect.height) / f64::from(expected.image_height)
+                    * f64::from(expected.height)
+            } / 3.0)
+                .round() as u32;
+            scroll_input::scroll_down(target, point, distance, direction, reverse.unwrap_or(false))?;
+            std::thread::sleep(Duration::from_millis(400));
+            let mut previous = capture_scroll_view(expected, rect)?;
+            let mut stable = 0;
+            for _ in 0..8 {
+                std::thread::sleep(Duration::from_millis(150));
+                validate_scroll_target(target, point)?;
+                let next = capture_scroll_view(expected, rect)?;
+                if crate::scrolling::unchanged(&previous, &next) {
+                    stable += 1;
+                    if stable >= 2 {
+                        return Ok(next);
+                    }
+                } else {
+                    stable = 0;
+                }
+                previous = next;
             }
-            rect.validate(image.width(), image.height())?;
-            Ok(
-                image::imageops::crop_imm(&image, rect.x, rect.y, rect.width, rect.height)
-                    .to_image(),
-            )
+            Err("页面仍在变化，已暂停自动采集并保留长图。等页面静止后可手动采集。".into())
         })();
         let restored = window
             .show()
@@ -1046,12 +1169,23 @@ async fn append_scroll_capture(app: AppHandle, window: WebviewWindow) -> Result<
             .as_mut()
             .filter(|scroll| scroll.label == label)
             .ok_or("长截图会话已结束")?;
-        let added = scroll.stitch.append(image)?;
-        scroll.progress(if added {
-            "已拼接下一屏。可继续向下滚动采集，或保存当前长图。"
+        let added = scroll
+            .stitch
+            .append(direction.prepare(image))
+            .map_err(|error| {
+                if direction == ScrollDirection::Horizontal {
+                    error.replace("向上滚回", "向左滚回")
+                } else {
+                    error
+                }
+            })?;
+        let mut progress = scroll.progress(if added {
+            "已拼接下一屏。可继续沿当前方向滚动采集，或保存当前长图。"
         } else {
-            "画面没有变化，未重复拼接。到达底部时可直接保存。"
-        })
+            "画面没有变化，已暂停；可能已到底或页面未响应。自动滚动方向相反时可勾选「反向滚轮」重试，也可手动采集。"
+        })?;
+        progress.unchanged = !added;
+        Ok(progress)
     })
     .await
     .map_err(|_| "采集长截图失败")?
@@ -1075,7 +1209,7 @@ async fn finish_scroll_capture(
                 .as_ref()
                 .filter(|scroll| scroll.label == label)
                 .ok_or("长截图会话已结束")?;
-            DynamicImage::ImageRgba8(scroll.stitch.image().clone())
+            DynamicImage::ImageRgba8(scroll.direction.finish(scroll.stitch.image()))
         };
         let seconds = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1155,6 +1289,12 @@ async fn cancel_capture(app: AppHandle, window: WebviewWindow) -> Result<()> {
     .await
     .map_err(|_| "取消截图失败")?
 }
+#[tauri::command]
+fn take_menu_request(app: AppHandle, window: WebviewWindow) -> Result<Option<String>> {
+    main_only(&window)?;
+    Ok(lock(&app.state::<Context>().pending_menu_request)?.take())
+}
+
 #[tauri::command]
 fn get_current_image(app: AppHandle, window: WebviewWindow) -> Result<Option<ImagePayload>> {
     main_only(&window)?;
@@ -1305,6 +1445,36 @@ fn reveal_saved_image(app: AppHandle, window: WebviewWindow) -> Result<()> {
         .map(|_| ())
         .map_err(|e| format!("无法打开图片位置：{e}"))
 }
+fn project_link(target: &str) -> Result<&'static str> {
+    match target {
+        "repository" => Ok("https://github.com/cpython666/starshot"),
+        "issues" => Ok("https://github.com/cpython666/starshot/issues/new"),
+        _ => Err("不支持的项目链接".into()),
+    }
+}
+
+#[tauri::command]
+async fn open_project_link(window: WebviewWindow, target: String) -> Result<()> {
+    main_only(&window)?;
+    let url = project_link(&target)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "macos")]
+        let mut command = std::process::Command::new("/usr/bin/open");
+        #[cfg(target_os = "windows")]
+        let mut command = std::process::Command::new("explorer.exe");
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let mut command = std::process::Command::new("xdg-open");
+        command
+            .arg(url)
+            .status()
+            .map_err(|error| format!("无法打开项目链接：{error}"))?
+            .success()
+            .then_some(())
+            .ok_or_else(|| "系统浏览器未能打开项目链接".into())
+    })
+    .await
+    .map_err(|_| "打开项目链接任务异常")?
+}
 // Transparent logical-pixel margin for the preview-only halo. Returned to the
 // pin WebView so its content size matches creation, resizing and zooming.
 const PIN_GUTTER: f64 = 12.0;
@@ -1363,6 +1533,7 @@ fn create_pin_payload(app: &AppHandle, payload: ImagePayload) -> Result<()> {
         lock(&context.pins)?.remove(&label);
         return Err(format!("无法创建贴图：{error}"));
     }
+    tray_menu::refresh(app);
     Ok(())
 }
 #[tauri::command]
@@ -1633,6 +1804,7 @@ fn pin_action(
             *settings = next;
             drop(settings);
             let _ = app.emit("pin-halo", enabled);
+            tray_menu::refresh(&app);
             Ok(())
         }
         "opacity" => {
@@ -1670,6 +1842,7 @@ struct AppStatus {
     platform: String,
     capture_available: bool,
     element_detection: bool,
+    shortcuts_paused: bool,
     shortcut: String,
     error: Option<String>,
 }
@@ -1682,6 +1855,10 @@ fn get_app_status(app: AppHandle, window: WebviewWindow) -> Result<AppStatus> {
         platform: std::env::consts::OS.into(),
         capture_available: permission,
         element_detection: crate::window_regions::element_detection_available(),
+        shortcuts_paused: app
+            .state::<Context>()
+            .shortcuts_paused
+            .load(Ordering::Acquire),
         shortcut: lock(&app.state::<Context>().settings)?
             .capture_shortcut
             .clone(),
@@ -1882,6 +2059,9 @@ fn set_desktop_settings(
         &old,
         &settings.preferences,
         |shortcut, register| {
+            if context.shortcuts_paused.load(Ordering::Acquire) {
+                return Ok(false);
+            }
             if register && app.global_shortcut().is_registered(shortcut) {
                 Ok(false)
             } else if register {
@@ -1926,6 +2106,7 @@ fn set_desktop_settings(
     drop(old);
     *lock(&context.shortcut_error)? = None;
     let _ = app.emit("pin-halo", settings.preferences.pin_halo);
+    tray_menu::refresh(&app);
     Ok(settings)
 }
 #[tauri::command]
@@ -1958,6 +2139,7 @@ fn set_editor_state(
     if release_startup {
         offer_idle_release(&app);
     }
+    tray_menu::refresh(&app);
     Ok(())
 }
 fn begin_exit(app: &AppHandle) -> Result<()> {
@@ -2487,6 +2669,9 @@ pub fn run() {
                     if record_shortcut(app, &shortcut.to_string()) {
                         return;
                     }
+                    if context.shortcuts_paused.load(Ordering::Acquire) {
+                        return;
+                    }
                     // A save may hold settings while awaiting a main-thread
                     // registration. Never make its hotkey callback wait back.
                     let bindings = context
@@ -2525,14 +2710,7 @@ pub fn run() {
             if !errors.is_empty() {
                 *lock(&app.state::<Context>().shortcut_error)? = Some(errors.join("；"));
             }
-            let show = MenuItem::with_id(app, "show", "打开星镜编辑器", true, None::<&str>)?;
-            let capture = MenuItem::with_id(app, "capture", "开始截图", true, None::<&str>)?;
-            let pin = MenuItem::with_id(app, "pin", "贴出最近截图原图", true, None::<&str>)?;
-            let recover =
-                MenuItem::with_id(app, "recover", "恢复所有贴图鼠标操作", true, None::<&str>)?;
-            let close = MenuItem::with_id(app, "close-pins", "关闭全部贴图", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "退出星镜", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &capture, &pin, &recover, &close, &quit])?;
+            let menu = tray_menu::build(app.handle())?;
             // Tray glyphs need a transparent, readable silhouette at menu-bar sizes.
             // macOS recolors its alpha mask; other platforms use a light/dark outline.
             let tray_bytes: &[u8] = if cfg!(target_os = "macos") {
@@ -2552,43 +2730,16 @@ pub fn run() {
                 .tooltip("星镜 Starshot")
                 .menu(&menu)
                 .show_menu_on_left_click(true)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "show" => show_main(app),
-                    "capture" => dispatch_capture(app),
-                    "pin" => dispatch_pin(app),
-                    "recover" => {
-                        if let Err(error) = app.state::<Updates>().ensure_idle() {
-                            report_error(app, &error);
-                            return;
-                        }
-                        for (label, window) in app.webview_windows() {
-                            if label.starts_with("pin-") {
-                                let _ = window.set_ignore_cursor_events(false);
-                                let _ = window.show();
-                            }
-                        }
+                .on_tray_icon_event(|tray, event| {
+                    if matches!(
+                        event,
+                        tauri::tray::TrayIconEvent::Enter { .. }
+                            | tauri::tray::TrayIconEvent::Click { .. }
+                    ) {
+                        tray_menu::refresh(tray.app_handle());
                     }
-                    "close-pins" => {
-                        if let Err(error) = app.state::<Updates>().ensure_idle() {
-                            report_error(app, &error);
-                            return;
-                        }
-                        for (label, window) in app.webview_windows() {
-                            if label.starts_with("pin-") {
-                                let _ = window.destroy();
-                            }
-                        }
-                        if let Ok(mut pins) = app.state::<Context>().pins.lock() {
-                            pins.clear();
-                        }
-                    }
-                    "quit" => {
-                        if let Err(error) = begin_exit(app) {
-                            report_error(app, &error);
-                        }
-                    }
-                    _ => {}
-                });
+                })
+                .on_menu_event(|app, event| tray_menu::handle(app, event.id.as_ref()));
             tray.build(app)?;
             if !hidden {
                 show_main(app.handle());
@@ -2639,6 +2790,7 @@ pub fn run() {
                     if let Ok(mut pins) = window.app_handle().state::<Context>().pins.lock() {
                         pins.remove(window.label());
                     }
+                    tray_menu::refresh(window.app_handle());
                 } else if window.label().starts_with("capture-") {
                     let app = window.app_handle().clone();
                     let label = window.label().to_string();
@@ -2670,6 +2822,7 @@ pub fn run() {
             finish_scroll_capture,
             cancel_capture,
             get_current_image,
+            take_menu_request,
             save_image,
             copy_image,
             pin_image,
@@ -2702,6 +2855,7 @@ pub fn run() {
             get_recovery_storage,
             delete_recovery_point,
             copy_text,
+            open_project_link,
             reveal_saved_image
         ])
         .build(tauri::generate_context!())
@@ -2742,6 +2896,54 @@ pub fn run() {
 #[cfg(test)]
 mod lifecycle_tests {
     use super::{CaptureAction, CaptureOutcome, EditorLifecycle};
+
+    #[test]
+    fn scroll_center_maps_retina_and_negative_monitor_coordinates() {
+        let monitor = super::CaptureMonitor {
+            id: 1,
+            x: -1440,
+            y: -900,
+            width: 1440,
+            height: 900,
+            scale: 2.0,
+            image_width: 2880,
+            image_height: 1800,
+        };
+        let rect = crate::imaging::Rect {
+            x: 400,
+            y: 200,
+            width: 800,
+            height: 600,
+        };
+        assert_eq!(super::scroll_point(monitor, rect), (-1040, -650));
+        let physical = super::CaptureMonitor {
+            width: 2880,
+            height: 1800,
+            ..monitor
+        };
+        assert_eq!(super::scroll_point(physical, rect), (-640, -400));
+    }
+
+    #[test]
+    fn project_links_only_allow_fixed_public_destinations() {
+        assert_eq!(
+            super::project_link("repository").unwrap(),
+            "https://github.com/cpython666/starshot"
+        );
+        assert_eq!(
+            super::project_link("issues").unwrap(),
+            "https://github.com/cpython666/starshot/issues/new"
+        );
+        for target in [
+            "",
+            "https://github.com/other",
+            "file:///tmp/private",
+            "--help",
+            "Repository",
+        ] {
+            assert!(super::project_link(target).is_err());
+        }
+    }
 
     #[test]
     fn capture_action_contract_rejects_unknown_actions_and_reports_save_cancellation() {

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 withDefaults(defineProps<{name:string;size?:number}>(),{size:20})
 const paths:Record<string,string>={
+ github:'M9 22v-3.6c0-.9.3-1.7.8-2.2C6.5 15.8 3 14.5 3 9c0-1.5.6-2.8 1.6-3.8C4.3 4.1 4.4 2.8 4.8 2c1.4-.1 3.3 1.1 3.8 1.5a15 15 0 0 1 6.8 0C15.9 3.1 17.8 1.9 19.2 2c.4.8.5 2.1.2 3.2C20.4 6.2 21 7.5 21 9c0 5.5-3.5 6.8-6.8 7.2.5.5.8 1.3.8 2.2V22M9 19c-5 1.5-5-2.5-7-3',
  capture:'M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3M3 16v3a2 2 0 0 0 2 2h3m13-5v3a2 2 0 0 1-2 2h-3M8 8h8v8H8z',
  image:'M4 4h16v16H4zM4 16l5-5 4 4 3-3 4 4M15 8h.01',
  import:'M12 15V3m-4 4 4-4 4 4M4 14v6h16v-6',

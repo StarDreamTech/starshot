@@ -7,6 +7,7 @@
         "allow": [
           "start_capture",
           "get_current_image",
+          "take_menu_request",
           "take_pending_pin_edit",
           "finish_pin_edit",
           "save_image",
@@ -36,6 +37,7 @@
           "get_recovery_storage",
           "delete_recovery_point",
           "copy_text",
+          "open_project_link",
           "reveal_saved_image",
           "recognize_text"
         ]
@@ -43,7 +45,7 @@
     },
     {
       "identifier": "capture-commands",
-      "description": "A capture overlay can read only its own frozen frame, explicitly edit/copy/save/pin its selection, start and explicitly append/finish a scroll capture, or cancel that capture",
+      "description": "A capture overlay can read only its own frozen frame, explicitly edit/copy/save/pin its selection, start a manual or opt-in automatic scroll capture with serialized append/finish, or cancel that capture",
       "commands": {
         "allow": [
           "get_capture_frame",

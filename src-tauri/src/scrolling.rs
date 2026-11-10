@@ -7,6 +7,29 @@ type Result<T> = std::result::Result<T, String>;
 const MAX_FRAMES: u32 = 100;
 const NO_MATCH: &str = "没有找到可靠的重叠内容，已保留长图。请向上滚回一些，保留至少三分之一原画面，等页面静止后再采集；选区请避开动态内容。";
 
+#[derive(Clone, Copy, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ScrollDirection {
+    #[default]
+    Vertical,
+    Horizontal,
+}
+
+impl ScrollDirection {
+    pub fn prepare(self, image: RgbaImage) -> RgbaImage {
+        match self {
+            Self::Vertical => image,
+            Self::Horizontal => imageops::rotate90(&image),
+        }
+    }
+    pub fn finish(self, image: &RgbaImage) -> RgbaImage {
+        match self {
+            Self::Vertical => image.clone(),
+            Self::Horizontal => imageops::rotate270(image),
+        }
+    }
+}
+
 pub struct ScrollImage {
     image: RgbaImage,
     previous: RgbaImage,
@@ -140,7 +163,10 @@ fn row_difference(a: &RgbaImage, b: &RgbaImage, ay: u32, by: u32, columns: u32) 
     }
     total as f64 / f64::from(columns * 3)
 }
-fn unchanged(a: &RgbaImage, b: &RgbaImage) -> bool {
+pub(crate) fn unchanged(a: &RgbaImage, b: &RgbaImage) -> bool {
+    if a.dimensions() != b.dimensions() || a.width() == 0 || a.height() == 0 {
+        return false;
+    }
     let mut changed = 0;
     for i in 0..128 {
         let y = (a.height() - 1) * i / 127;
@@ -278,6 +304,23 @@ mod tests {
             scroll.image(),
             &imageops::crop_imm(&original, 0, 0, 128, 480).to_image()
         );
+    }
+    #[test]
+    fn horizontal_stitch_restores_original_orientation_and_exact_pixels() {
+        let direction = ScrollDirection::Horizontal;
+        let original = imageops::rotate270(&page());
+        let viewport = |offset| imageops::crop_imm(&original, offset, 0, 240, 128).to_image();
+        let mut scroll = ScrollImage::new(direction.prepare(viewport(0))).unwrap();
+        assert!(scroll.append(direction.prepare(viewport(100))).unwrap());
+        assert!(scroll.append(direction.prepare(viewport(200))).unwrap());
+        assert!(!scroll.append(direction.prepare(viewport(200))).unwrap());
+        assert_eq!(
+            direction.finish(scroll.image()),
+            imageops::crop_imm(&original, 0, 0, 440, 128).to_image()
+        );
+        let before = scroll.image().clone();
+        assert!(scroll.append(direction.prepare(viewport(100))).is_err());
+        assert_eq!(scroll.image(), &before);
     }
     #[test]
     fn keeps_sticky_header_and_footer_once() {

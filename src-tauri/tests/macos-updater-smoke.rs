@@ -2,7 +2,7 @@
 //! STARSHOT_UPDATER_SMOKE_DIR="$PWD/artifacts/updater-smoke" cargo test --locked \
 //!   --manifest-path src-tauri/Cargo.toml --features updater-smoke \
 //!   --test macos-updater-smoke -- --ignored --nocapture
-//! The directory must contain the public 0.3.0 Starshot.app, 0.3.1 latest.json,
+//! The directory must contain the public 0.3.0 Starshot.app, the candidate latest.json,
 //! and the signed .app.tar.gz named by that manifest. No app is launched.
 
 #![cfg(all(target_os = "macos", feature = "updater-smoke"))]
@@ -40,8 +40,9 @@ fn verify_codesign(app: &Path) {
 }
 
 #[test]
-#[ignore = "requires public 0.3.0 app and signed 0.3.1 artifacts; changes only a temporary copy"]
+#[ignore = "requires public 0.3.0 app and signed candidate artifacts; changes only a temporary copy"]
 fn signed_update_replaces_temporary_app_and_rejects_corruption() {
+    let candidate_version = env!("CARGO_PKG_VERSION");
     let fixtures = fs::canonicalize(
         std::env::var_os("STARSHOT_UPDATER_SMOKE_DIR")
             .expect("set STARSHOT_UPDATER_SMOKE_DIR to the release artifacts directory"),
@@ -93,9 +94,9 @@ fn signed_update_replaces_temporary_app_and_rejects_corruption() {
     let update = updater
         .restore_update(manifest)
         .expect("restore the real release manifest")
-        .expect("0.3.1 is newer than 0.3.0");
+        .expect("candidate is newer than 0.3.0");
     assert_eq!(update.current_version, "0.3.0");
-    assert_eq!(update.version, "0.3.1");
+    assert_eq!(update.version, candidate_version);
     let archive_name = update
         .download_url
         .path_segments()
@@ -128,9 +129,9 @@ fn signed_update_replaces_temporary_app_and_rejects_corruption() {
     update
         .install(&bytes)
         .expect("install the verified release into the temporary app");
-    assert_eq!(version(&installed), "0.3.1");
+    assert_eq!(version(&installed), candidate_version);
     assert!(installed.join("Contents/MacOS/starshot").is_file());
     verify_codesign(&installed);
     assert_eq!(version(&original), "0.3.0");
-    println!("Verified: corrupted update rejected without changing 0.3.0; signed 0.3.1 installed and codesign passed. No app launched or restarted.");
+    println!("Verified: corrupted update rejected without changing 0.3.0; signed {candidate_version} installed and codesign passed. No app launched or restarted.");
 }

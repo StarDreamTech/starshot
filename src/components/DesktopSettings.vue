@@ -4,7 +4,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { shortcutFromKey, shortcutLabel } from '../shortcuts'
 
-const props = withDefaults(defineProps<{ section?: 'shortcuts' | 'general' | null }>(), { section: 'shortcuts' })
+const props = withDefaults(defineProps<{ section?: 'shortcuts' | 'general' | null; shortcutsPaused?: boolean }>(), { section: 'shortcuts' })
 const emit = defineEmits<{ shortcuts: [value: { captureShortcut: string; pinShortcut: string }] }>()
 type ShortcutField = 'captureShortcut' | 'pinShortcut'
 type Check = { status: 'available' | 'current' | 'unavailable' | 'invalid'; message: string }
@@ -151,6 +151,7 @@ onBeforeUnmount(() => {
       <div v-show="section === 'shortcuts'">
         <section class="settings-section">
           <h3>全局快捷键</h3>
+          <p v-if="shortcutsPaused" class="field-note" role="status">全局快捷键已暂停，组合键已释放。可从托盘菜单恢复；保存设置会保留暂停状态。</p>
           <p class="field-note">点击“录入”后按组合键，也可以直接编辑。修改后点击保存生效。</p>
           <div v-for="field in fields" :key="field.key" class="shortcut-field">
             <label :for="`shortcut-${field.key}`">{{ field.name }} <kbd>{{ shortcutLabel(settings[field.key], isMac) }}</kbd></label>

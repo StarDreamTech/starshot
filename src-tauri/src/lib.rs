@@ -66,6 +66,7 @@ mod capability_tests {
         for (command, permitted) in [
             ("start_capture", [true, false, false]),
             ("get_current_image", [true, false, false]),
+            ("take_menu_request", [true, false, false]),
             ("take_pending_pin_edit", [true, false, false]),
             ("finish_pin_edit", [true, false, false]),
             ("save_image", [true, false, false]),
@@ -92,6 +93,7 @@ mod capability_tests {
             ("get_recovery_storage", [true, false, false]),
             ("delete_recovery_point", [true, false, false]),
             ("copy_text", [true, false, false]),
+            ("open_project_link", [true, false, false]),
             ("reveal_saved_image", [true, false, false]),
             ("recognize_text", [true, false, false]),
             ("plugin:autostart|enable", [false, false, false]),

@@ -32,6 +32,7 @@ const source = '(' + function (version) {
       mock.calls.push({ command, args: clone(args) });
       if (command === 'plugin:event|listen') { listeners.set(++id, args); return id; }
       if (command === 'plugin:event|unlisten') { listeners.delete(args.eventId); return; }
+      if (command === 'take_menu_request') return null;
       if (command === 'get_current_image') return null;
       if (command === 'take_pending_pin_edit') {
         const pending = mock.pendingPinEdit; mock.pendingPinEdit = null;
