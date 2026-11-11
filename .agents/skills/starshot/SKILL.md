@@ -13,6 +13,7 @@ description: 星镜 Starshot 项目共享知识库。处理本仓库任务前读
 
 - v0.3.2已于2026-11-10 16:26:09 UTC（北京时间11月11日00:26:09）公开为稳定latest，标签源码`54d880b`，两平台安装包、Tauri更新签名、稳定清单及Homebrew已同步；具体来源与哈希见[更新和版本](references/releases.md)及[发布指南](../../../docs/releases.md)。源码公开、安装及发行分别判断。
 - 公开仓库为 [StarDreamTech/starshot](https://github.com/StarDreamTech/starshot)。`cpython666/starshot` 仍是同源 fork，并且仍公开 v0.3.2 Release；2026-11-11 匿名请求其 latest.json 跟随跳转后为 HTTP 200，安装包 URL 仍是旧 owner。新构建的更新端点与下载白名单是 StarDreamTech/starshot。已发布 v0.3.2 清单正文仍含旧下载地址。Homebrew 在稳定版公开后把同一 Cask 写入个人 tap 与组织 tap；任一部署密钥缺失时该任务跳过，另一个任务不受影响，见[更新和版本](references/releases.md)。
+- 项目介绍页为 https://stardreamtech.github.io/projects/starshot/ 。README 开头保留「项目介绍 / Project site」链接。仓库仍只有一份 `README.md`，其中已有 English 段，没有独立的其他语言 README。2026-11-11 该介绍页曾返回 HTTP 404；同日再次请求为 HTTP 200。同日 `gh repo edit --homepage` 曾返回 HTTP 403；随后 GitHub API 的 `homepage` 已是该介绍页，About 的 website 设置已完成。
 - 最后已核验日用安装为`/Applications/Starshot.app`，源码`990bc69`、本地0.3.1；2026-11-05新进程录屏与辅助功能预检通过。这是历史预检，不保证下一次替换后权限仍有效。备份、二进制哈希与权限记录见[本机修复版](references/releases.md#本机修复版与后续待办2026-10-29)。
 - 分享复制前预览、主按钮hover修复、托盘分组/贴图显隐/快捷键暂停、设置与截图键鼠改进已包含在0.3.2；未替换日用应用。实现见[分享与托盘](references/implementation.md#2026-11-10分享预览与托盘菜单)，实际验证见[验证记录](../../../docs/verification.md)。工作前仍须重新检查工作区，保留其他改动。
 - 长截图借鉴QQ的方向切换、累计预览与当前屏蓝框，0.3.2包含主动自动滚动和横向拼接；算法/模拟浏览器、macOS原创窗口输入和双平台构建已验证，生产采集全流程与Windows原生滚轮输入仍待完成，详见[长截图说明](../../../docs/scroll-capture.md)。
