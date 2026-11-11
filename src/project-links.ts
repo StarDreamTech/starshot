@@ -1,6 +1,8 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
 
 export const projectLinks = {
+  organization: 'https://stardreamtech.github.io/',
+  project: 'https://stardreamtech.github.io/projects/starshot/',
   repository: 'https://github.com/StarDreamTech/starshot',
   issues: 'https://github.com/StarDreamTech/starshot/issues/new',
 } as const

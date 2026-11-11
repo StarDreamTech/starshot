@@ -1,6 +1,6 @@
 # 星镜版本、更新与发布
 
-源码与下载仓库：[StarDreamTech/starshot](https://github.com/StarDreamTech/starshot)。用户已确认使用公开仓库承载更新下载。应用只在手动检查或下载更新时访问 GitHub，不在启动时联网，不上传图片或编辑内容。
+源码与下载仓库：[StarDreamTech/starshot](https://github.com/StarDreamTech/starshot)，由星梦科技 StarDreamTech 维护。组织主页是 [stardreamtech.github.io](https://stardreamtech.github.io/)，项目介绍是 [stardreamtech.github.io/projects/starshot](https://stardreamtech.github.io/projects/starshot/)。用户已确认使用公开仓库承载更新下载。应用只在手动检查或下载更新时访问 GitHub，不在启动时联网，不上传图片或编辑内容。
 
 ## 版本控制
 
@@ -63,6 +63,31 @@ Tauri 更新签名与平台代码签名不是同一件事。目前 macOS 默认 
 5. 公开为最新稳定版后，`homebrew.yml` 核验 DMG 并推送 Cask。个人 Tap 使用 `HOMEBREW_TAP_DEPLOY_KEY`，组织 Tap 使用 `HOMEBREW_ORG_TAP_DEPLOY_KEY`。某个 Secret 未配置时，该 Tap 跳过并给出提示，另一个 Tap 继续。
 
 当前执行过的检查与尚未验证项以 docs/verification.md 为准。
+
+## 准备中的 0.3.3（尚未发布）
+
+源码版本已升到 0.3.3，变更记录在 [CHANGELOG.md](../CHANGELOG.md)。这次只准备说明和检查，没有创建 `v0.3.3` 标签，没有运行 `release.yml`，也没有公开 Release。已公开的稳定版仍是下面的 0.3.2。
+
+新构建的 `tauri.conf.json` 更新端点是 `https://github.com/StarDreamTech/starshot/releases/latest/download/latest.json`。`src-tauri/src/updater.rs` 的下载白名单前缀是 `https://github.com/StarDreamTech/starshot/releases/download/`。`release.yml` 组装清单时使用 `GITHUB_REPOSITORY`，在组织仓库运行时会写成同一 owner。
+
+已安装的 0.3.2 不是这个配置。标签 `v0.3.2` 的端点是 `https://github.com/cpython666/starshot/releases/latest/download/latest.json`，白名单前缀是 `https://github.com/cpython666/starshot/releases/download/`。2026-11-11 匿名请求该端点：先 302 到旧仓库的 `/releases/download/v0.3.2/latest.json`，再 302 到发布资源并返回 HTTP 200。清单版本是 0.3.2，两个平台的安装包 URL 仍在 `cpython666/starshot`。旧仓库的公开 Release 也仍是这一版，资产为 `latest.json`、macOS 更新包和 Windows 安装包。因此只在组织仓库发布 0.3.3，旧客户端仍会读到 0.3.2；即便把组织仓库的清单复制过去，旧白名单也会拒绝 `StarDreamTech` 下载地址。
+
+现有检查不能代替这条路径：
+
+- `src-tauri/tests/macos-updater-smoke.rs` 把当前 `tauri.conf.json` 的更新配置注入模拟运行时，并从本地 `latest.json` 恢复更新。它要求夹具应用是 0.3.0，不请求 0.3.2 的旧端点，而且只在 macOS 上运行。
+- Windows 安装器检查用本地 NSIS 从固定的 0.3.0 安装包做静默升级，不经过 GitHub 更新端点。
+- `scripts/legacy-update-check.mjs` 只判断一份清单是否高于 0.3.2，以及两个平台 URL 是否仍以旧白名单开头。它不下载安装包、不验签、不安装。当前公开的旧清单应得到失败结果，因为版本仍是 0.3.2。
+
+发布 0.3.3 之后，可以这样查看旧客户端是否至少能接受清单：
+
+```sh
+curl -fsSL https://github.com/cpython666/starshot/releases/latest/download/latest.json -o artifacts/legacy-latest.json
+node scripts/legacy-update-check.mjs artifacts/legacy-latest.json
+```
+
+`ok: true` 只说明旧端点上的清单版本更高，且下载地址仍在旧仓库。要让已安装的 0.3.2 自动升级，还得在 `cpython666/starshot` 发布成为 latest 的 0.3.3，清单里的 URL 使用该旧前缀，安装包通过同一把更新公钥验签。组织仓库上的 0.3.3 只服务新安装和已经改到新端点的构建。签名安装仍须在对应系统上用真实更新包另行验收，不能由上述脚本代替。
+
+公开发布仍按上一节执行：合并本准备后创建并推送 `v0.3.3`，或对已有标签手动运行 `release.yml`。工作流只生成草稿。确认草稿后，再由有权限的人把它公开为最新稳定版；`homebrew.yml` 随后把同一 Cask 写入个人 tap 与组织 tap。不要为了验证而在本仓库打标签或公开 Release。
 
 ## 当前公开版本：0.3.2
 

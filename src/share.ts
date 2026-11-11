@@ -1,4 +1,7 @@
-export const SHARE_TEXT = '星镜 Starshot：本地截图、标注、置顶贴图与图片美化。渐变背景、圆角边框、离线敏感信息打码，让截图更清楚、更好看。图片在本机处理，不上传。macOS / Windows。\nhttps://github.com/StarDreamTech/starshot';
+export const SHARE_BRAND = '星梦科技 StarDreamTech';
+export const SHARE_SITE = 'https://stardreamtech.github.io/projects/starshot/';
+export const SHARE_REPOSITORY = 'https://github.com/StarDreamTech/starshot';
+export const SHARE_TEXT = `星镜 Starshot：本地截图、标注、置顶贴图与图片美化。渐变背景、圆角边框、离线敏感信息打码，让截图更清楚、更好看。图片在本机处理，不上传。macOS / Windows。${SHARE_BRAND}。\n${SHARE_SITE}\n${SHARE_REPOSITORY}`;
 
 /** Original vector-like product artwork, drawn locally without reading the desktop. */
 export function createShareImage(): string {
@@ -18,7 +21,8 @@ export function createShareImage(): string {
   x.beginPath();x.moveTo(690,845);x.lineTo(540,800);x.lineTo(570,834);x.moveTo(540,800);x.lineTo(584,790);x.stroke();
   x.fillStyle='#ffffff';x.font='600 35px sans-serif';x.fillText('图片只在本机处理，不上传',80,1110);
   x.fillStyle='#c2bed5';x.font='28px sans-serif';x.fillText('原创示意画面 · macOS / Windows',80,1170);
-  x.font='25px sans-serif';x.fillText('github.com/StarDreamTech/starshot',80,1320);
+  x.font='25px sans-serif';x.fillText(SHARE_BRAND,80,1260);
+  x.fillText(SHARE_SITE.replace(/^https:\/\//, ''),80,1320);
   // Six-bit RGB keeps this generated poster compact while retaining softer gradients.
   const pixels = x.getImageData(0, 0, c.width, c.height);
   for (let i = 0; i < pixels.data.length; i += 4) {
