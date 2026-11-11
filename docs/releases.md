@@ -34,6 +34,7 @@ npm run version:check -- v0.3.1
 
 - `verify.yml`：每次推送/PR校验版本、前后端测试、格式与 macOS Apple Silicon / Windows x64 打包，不需要发行密钥；独立脚本任务执行真实 minisign 验签回归。
 - `release.yml`：已有 `vX.Y.Z` 标签触发，或手动指定已有标签；版本、提交与标签匹配后构建两个平台，要求签名密钥。
+- `homebrew.yml`：稳定版公开后核验 DMG，并把同一 Cask 写入 `cpython666/homebrew-tap`（`HOMEBREW_TAP_DEPLOY_KEY`）和 `StarDreamTech/homebrew-tap`（`HOMEBREW_ORG_TAP_DEPLOY_KEY`）。任一 Secret 未配置或只有空白时，对应任务写明跳过并成功结束；一个 Tap 推送失败不影响另一个。详见 [Homebrew 指南](homebrew.md)。
 - `release-manifest.mjs`：要求完整且唯一的平台产物，真实验签并核对版本绑定，然后生成 latest.json、SHA256SUMS 和发布说明。
 - 流程只创建/更新 Release 草稿，不自动公开；拒绝覆盖已发布的同版本 Release 及已有草稿资产。已有资产的草稿需要重跑时，先人工检查并删除旧草稿，流程不会覆盖文件。
 
@@ -59,6 +60,7 @@ Tauri 更新签名与平台代码签名不是同一件事。目前 macOS 默认 
 2. 对候选安装包做两平台安装、旧版升级、签名损坏拒绝、备份失败停止、重启和会话恢复验收。开发构建或模拟 IPC 不能替代此项。
 3. 创建并推送对应标签，让流程生成草稿；核对两平台文件、校验和、发布说明。
 4. 确认验收完成后，手动发布草稿为最新稳定版。首次公开发布须由用户明确决定。
+5. 公开为最新稳定版后，`homebrew.yml` 核验 DMG 并推送 Cask。个人 Tap 使用 `HOMEBREW_TAP_DEPLOY_KEY`，组织 Tap 使用 `HOMEBREW_ORG_TAP_DEPLOY_KEY`。某个 Secret 未配置时，该 Tap 跳过并给出提示，另一个 Tap 继续。
 
 当前执行过的检查与尚未验证项以 docs/verification.md 为准。
 

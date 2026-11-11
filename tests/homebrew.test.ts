@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { generateHomebrewCask } from '../scripts/homebrew-cask.mjs';
+import { caskDownloadUrl, homepage } from '../scripts/homebrew-release.mjs';
 
 test('Cask generation binds the current version to actual DMG bytes and preserves user data', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'starshot-cask-'));
@@ -18,6 +19,8 @@ test('Cask generation binds the current version to actual DMG bytes and preserve
     const cask = await readFile(outputPath, 'utf8');
     assert.ok(cask.includes(`sha256 "${result.sha256}"`));
     assert.ok(cask.includes('version "0.3.0"') && cask.includes('/releases/tag/v0.3.0'));
+    assert.ok(cask.includes(`url "${caskDownloadUrl}"`) && cask.includes(`homepage "${homepage}"`));
+    assert.doesNotMatch(cask, /cpython666/);
     assert.ok(cask.includes('auto_updates true') && cask.includes('depends_on arch: :arm64') && cask.includes('depends_on macos: :monterey'));
     assert.ok(cask.includes('app "Starshot.app"') && cask.includes('not Apple-notarized'));
     assert.doesNotMatch(cask, /:no_check|\bzap\b|\buninstall\b|xattr|quarantine|--force/);

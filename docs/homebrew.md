@@ -1,8 +1,26 @@
 # 星镜 Homebrew 分发
 
-星镜使用已有的公开安装源 [cpython666/homebrew-tap](https://github.com/cpython666/homebrew-tap)，目标文件为 `Casks/starshot.rb`；现有 `Casks/starclip.rb` 独立保留。2026-10-26 核对远端默认分支为 `main`，基线提交为 `e11f8f06a43e4754855a8f101a39bc712aebdf08`，仓库没有额外 AGENTS 或发布工作流。
+星镜的 Cask 同时放在个人安装源 [cpython666/homebrew-tap](https://github.com/cpython666/homebrew-tap) 和组织安装源 [StarDreamTech/homebrew-tap](https://github.com/StarDreamTech/homebrew-tap)，目标文件都是 `Casks/starshot.rb`。两个仓库里的 `Casks/starclip.rb` 独立保留。2026-10-26 核对个人 Tap 的默认分支为 `main`，基线提交为 `e11f8f06a43e4754855a8f101a39bc712aebdf08`，该 Tap 仓库没有额外 AGENTS 或发布工作流。
 
-[v0.3.2](https://github.com/StarDreamTech/starshot/releases/tag/v0.3.2)已于北京时间2026-11-11公开并成为应用内最新更新。Tap的 `Casks/starshot.rb` 与安装说明已同步，发行提交为 [`9ff014c`](https://github.com/cpython666/homebrew-tap/commit/9ff014cb18bf6f4c228e669c64ef24f61e978868)，可执行 `brew install --cask cpython666/tap/starshot`。仅提供Apple Silicon、macOS 12+；Windows使用独立NSIS安装包。
+[v0.3.2](https://github.com/StarDreamTech/starshot/releases/tag/v0.3.2)已于北京时间2026-11-11公开并成为应用内最新更新。2026-11-11 读取两个远端 `Casks/starshot.rb`，内容相同，都指向该 Release 的 DMG。个人 Tap 的发行提交为 [`9ff014c`](https://github.com/cpython666/homebrew-tap/commit/9ff014cb18bf6f4c228e669c64ef24f61e978868)。仅提供 Apple Silicon、macOS 12+；Windows 使用独立 NSIS 安装包。
+
+```sh
+brew install --cask stardreamtech/tap/starshot
+brew install --cask cpython666/tap/starshot
+```
+
+## 自动同步两个 Tap
+
+稳定版公开后，[`.github/workflows/homebrew.yml`](../.github/workflows/homebrew.yml) 只在 `StarDreamTech/starshot` 运行。仓库此前没有这条工作流，只有 `scripts/homebrew-cask.mjs`。工作流核验最新稳定 Release 的 DMG、SHA256SUMS、应用标识和签名，生成同一份 `Casks/starshot.rb`，再分别写入两个 Tap。下载地址和主页都是 `https://github.com/StarDreamTech/starshot` 的 Release。做法参照 [starclip#42](https://github.com/StarDreamTech/starclip/pull/42)：两个写入任务都只依赖核验任务，彼此不依赖。
+
+| Tap | 安装命令 | Secret | 密钥缺失或只有空白 |
+| --- | --- | --- | --- |
+| [cpython666/homebrew-tap](https://github.com/cpython666/homebrew-tap) | `brew install --cask cpython666/tap/starshot` | `HOMEBREW_TAP_DEPLOY_KEY` | `update-tap` 写明跳过并成功结束，不推送 |
+| [StarDreamTech/homebrew-tap](https://github.com/StarDreamTech/homebrew-tap) | `brew install --cask stardreamtech/tap/starshot` | `HOMEBREW_ORG_TAP_DEPLOY_KEY` | `update-org-tap` 写明跳过并成功结束，不推送 |
+
+组织 Tap 的密钥已配置但检出或推送失败时，只有 `update-org-tap` 失败。个人 Tap 是独立任务，不因此失败，已经推送的提交也不会回滚。个人 Tap 推送失败同样不影响组织 Tap。每个任务只提交 `Casks/starshot.rb`。
+
+手动运行默认只核验、不推送。草稿、预发布和非最新稳定版不改 Tap。Tap 里已有更新版本，或同版本且 SHA-256 相同，则不降级、不覆盖。工作流不修改 Tap 中其他产品，也不改应用内更新端点。下面的手工步骤仍用于工作流没有推送时的核对和补发。
 
 ## 生成 Cask
 
@@ -40,16 +58,26 @@ HOMEBREW_DEVELOPER=1 HOMEBREW_NO_AUTO_UPDATE=1 brew audit --cask --strict --onli
 HOMEBREW_NO_AUTO_UPDATE=1 brew fetch --cask cpython666/tap/starshot
 ```
 
+组织源把命令里的 `cpython666/tap` 换成 `stardreamtech/tap`，检查同一份 Cask。
+
 `HOMEBREW_DEVELOPER=1` 仅作用于该命令，避免 developer 命令自动保存全局开发者模式。当前系统已安装 Tap 的路径是 `/opt/homebrew/Library/Taps/cpython666/homebrew-tap`；准备工作使用本仓库忽略的 `artifacts/homebrew-tap` 克隆，origin 指向 GitHub，不能将本地克隆误当作已安装的 Tap。
 
 Homebrew 自有 Tap 通过 Git 仓库维护；公开包及安装描述上线后，用户可执行下列命令。[Tap 维护与使用](https://docs.brew.sh/How-to-Create-and-Maintain-a-Tap)
 
 ```sh
+brew install --cask stardreamtech/tap/starshot
 brew install --cask cpython666/tap/starshot
-brew update
-brew upgrade --cask --greedy cpython666/tap/starshot
-brew uninstall --cask cpython666/tap/starshot
 ```
+
+更新和卸载使用当初安装的那个 Tap。组织源示例：
+
+```sh
+brew update
+brew upgrade --cask --greedy stardreamtech/tap/starshot
+brew uninstall --cask stardreamtech/tap/starshot
+```
+
+个人源把命令中的 `stardreamtech/tap` 换成 `cpython666/tap`。
 
 `--greedy` 将声明自更新的 Cask 纳入 Homebrew 升级。升级前应导出或备份当前编辑并退出星镜；不使用 `--force` 覆盖已有手动安装的版本。普通卸载只管理应用，不主动删除星镜恢复点。[Homebrew 命令说明](https://docs.brew.sh/Manpage)
 
