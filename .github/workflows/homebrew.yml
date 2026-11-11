@@ -1,0 +1,312 @@
+name: 发布后更新 Homebrew
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '已公开的稳定版本标签，例如 v0.3.2'
+        required: true
+        type: string
+      dry_run:
+        description: '只核验安装包和 Cask，不推送 Tap'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# 所有版本共用一个队列，后启动的旧版本重跑不能插到新版本前面。
+concurrency:
+  group: starshot-homebrew-tap
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: github.repository == 'StarDreamTech/starshot'
+    runs-on: macos-15
+    timeout-minutes: 60
+    outputs:
+      skip: ${{ steps.plan.outputs.skip }}
+      tag: ${{ steps.plan.outputs.tag }}
+      version: ${{ steps.plan.outputs.version }}
+      source: ${{ steps.source.outputs.revision }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_ANALYTICS: '1'
+    steps:
+      # Release 附件只作为输入。发布事件使用默认分支上的脚本，不执行标签里的代码。
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.repository.default_branch }}
+          persist-credentials: false
+      - id: source
+        run: echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 读取已公开版本和当前最新稳定版
+        uses: actions/github-script@v7
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.tag_name }}
+        with:
+          script: |
+            const fs = require('fs');
+            const tag = process.env.RELEASE_TAG;
+            if (!/^v\d+\.\d+\.\d+$/.test(tag)) throw new Error('Invalid release tag');
+            const release = (await github.rest.repos.getReleaseByTag({ ...context.repo, tag })).data;
+            let latest = null;
+            try {
+              latest = (await github.rest.repos.getLatestRelease(context.repo)).data;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+            fs.writeFileSync('release.json', JSON.stringify(release));
+            fs.writeFileSync('latest-release.json', JSON.stringify(latest));
+      - name: 只接受最新的公开稳定版
+        id: plan
+        run: |
+          node scripts/homebrew-release.mjs prepare release.json latest-release.json plan.json
+          node --input-type=module <<'JS'
+          import { appendFileSync, readFileSync } from 'node:fs';
+          const plan = JSON.parse(readFileSync('plan.json', 'utf8'));
+          for (const key of ['skip', 'tag', 'version', 'dmgName']) {
+            if (plan[key] !== undefined) appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${plan[key]}\n`);
+          }
+          if (plan.skip) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${plan.reason}\n`);
+          JS
+      - name: 下载已公开的 DMG 和校验清单
+        if: steps.plan.outputs.skip != 'true'
+        env:
+          RELEASE_TAG: ${{ steps.plan.outputs.tag }}
+          DMG_NAME: ${{ steps.plan.outputs.dmgName }}
+        run: gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$DMG_NAME" --pattern SHA256SUMS --dir downloaded
+      - name: 按发布校验和核对实际字节
+        if: steps.plan.outputs.skip != 'true'
+        env:
+          DMG_NAME: ${{ steps.plan.outputs.dmgName }}
+        run: node scripts/homebrew-release.mjs verify plan.json downloaded/SHA256SUMS "downloaded/$DMG_NAME" evidence.json
+      - name: 只读检查 DMG 内的应用且不启动它
+        if: steps.plan.outputs.skip != 'true'
+        env:
+          DMG_NAME: ${{ steps.plan.outputs.dmgName }}
+          RELEASE_VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          hdiutil verify "downloaded/$DMG_NAME"
+          mountpoint=$(mktemp -d "$RUNNER_TEMP/starshot-dmg.XXXXXX")
+          trap 'hdiutil detach "$mountpoint" || true; rmdir "$mountpoint" || true' EXIT
+          hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$mountpoint" "downloaded/$DMG_NAME"
+          app="$mountpoint/Starshot.app"
+          test -d "$app"
+          codesign --verify --deep --strict "$app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = com.starshot.desktop
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$RELEASE_VERSION"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")" = "$RELEASE_VERSION"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")" = starshot
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$app/Contents/Info.plist")" = 12.0
+          test -x "$app/Contents/MacOS/starshot"
+          test "$(lipo -archs "$app/Contents/MacOS/starshot")" = arm64
+      - name: 生成 Cask 并用 Homebrew 检查
+        if: steps.plan.outputs.skip != 'true'
+        env:
+          DMG_NAME: ${{ steps.plan.outputs.dmgName }}
+          HOMEBREW_GITHUB_API_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/homebrew-release.mjs cask evidence.json "downloaded/$DMG_NAME" starshot.rb
+          brew update
+          brew --version
+          brew tap cpython666/tap
+          tap_path="$(brew --repository cpython666/tap)"
+          cp starshot.rb "$tap_path/Casks/starshot.rb"
+          brew style --cask cpython666/tap/starshot
+          brew trust --cask cpython666/tap/starshot
+          brew audit --cask --strict --online --arch=arm cpython666/tap/starshot
+          brew fetch --cask --arch=arm cpython666/tap/starshot
+          cmp starshot.rb "$tap_path/Casks/starshot.rb"
+      - uses: actions/upload-artifact@v4
+        if: steps.plan.outputs.skip != 'true'
+        with:
+          name: verified-homebrew-cask
+          path: |
+            evidence.json
+            starshot.rb
+          if-no-files-found: error
+      - name: 记录仅核验的手动运行
+        if: steps.plan.outputs.skip != 'true' && github.event_name == 'workflow_dispatch' && (inputs.dry_run == true || inputs.dry_run == 'true')
+        run: echo 'DMG、应用标识、签名、架构和 Homebrew 检查已通过。本次为演练，两个 Tap 都没有修改。' >> "$GITHUB_STEP_SUMMARY"
+
+  # 个人 Tap。密钥未配置时本任务成功跳过，不让组织 Tap 失败。
+  update-tap:
+    needs: verify
+    if: needs.verify.outputs.skip != 'true' && (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && (inputs.dry_run == false || inputs.dry_run == 'false')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: 个人 Tap 密钥未配置时跳过
+        id: personal_key
+        env:
+          TAP_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          stripped="${TAP_KEY//[[:space:]]/}"
+          if [ -z "$stripped" ]; then
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            message='未配置 HOMEBREW_TAP_DEPLOY_KEY，已跳过 cpython666/homebrew-tap。组织 Tap StarDreamTech/homebrew-tap（HOMEBREW_ORG_TAP_DEPLOY_KEY）不因此失败。'
+            echo "$message"
+            echo "$message" >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=个人 Tap 已跳过::$message"
+          else
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          fi
+          unset stripped TAP_KEY
+      - uses: actions/checkout@v4
+        if: steps.personal_key.outputs.configured == 'true'
+        with:
+          ref: ${{ needs.verify.outputs.source }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        if: steps.personal_key.outputs.configured == 'true'
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        if: steps.personal_key.outputs.configured == 'true'
+        with:
+          name: verified-homebrew-cask
+          path: verified
+      - uses: actions/checkout@v4
+        if: steps.personal_key.outputs.configured == 'true'
+        with:
+          repository: cpython666/homebrew-tap
+          ref: main
+          path: tap
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+      - name: 推送前再次读取公开版本
+        if: steps.personal_key.outputs.configured == 'true'
+        uses: actions/github-script@v7
+        env:
+          RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+        with:
+          script: |
+            const fs = require('fs');
+            const release = (await github.rest.repos.getReleaseByTag({ ...context.repo, tag: process.env.RELEASE_TAG })).data;
+            const latest = (await github.rest.repos.getLatestRelease(context.repo)).data;
+            fs.writeFileSync('release.json', JSON.stringify(release));
+            fs.writeFileSync('latest-release.json', JSON.stringify(latest));
+      - name: 只向前更新个人 Tap 的 Cask
+        id: apply
+        if: steps.personal_key.outputs.configured == 'true'
+        run: |
+          node scripts/homebrew-release.mjs recheck verified/evidence.json release.json latest-release.json
+          node scripts/homebrew-release.mjs apply verified/evidence.json verified/starshot.rb tap/Casks/starshot.rb > apply.json
+          node --input-type=module <<'JS'
+          import { appendFileSync, readFileSync } from 'node:fs';
+          const result = JSON.parse(readFileSync('apply.json', 'utf8'));
+          if (typeof result.changed !== 'boolean' || typeof result.reason !== 'string') throw new Error('Cask 更新结果无效。');
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${result.reason}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT, `changed=${result.changed}\n`);
+          JS
+      - name: 提交并推送个人 Tap
+        if: steps.personal_key.outputs.configured == 'true' && steps.apply.outputs.changed == 'true'
+        env:
+          RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+        run: |
+          case "$RELEASE_TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo '拒绝异常版本标签。' >&2; exit 1 ;;
+          esac
+          cmp verified/starshot.rb tap/Casks/starshot.rb
+          git -C tap config user.name 'github-actions[bot]'
+          git -C tap config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -C tap add -- Casks/starshot.rb
+          test "$(git -C tap diff --cached --name-only)" = 'Casks/starshot.rb'
+          git -C tap commit -m "自动更新星镜 Cask 至 ${RELEASE_TAG}"
+          git -C tap push origin HEAD:main
+          echo "已用 HOMEBREW_TAP_DEPLOY_KEY 更新 cpython666/homebrew-tap 至 ${RELEASE_TAG}。" >> "$GITHUB_STEP_SUMMARY"
+
+  # 与 update-tap 分开。组织 Tap 缺密钥或推送失败，都不改变个人 Tap 任务的结果。
+  update-org-tap:
+    needs: verify
+    if: needs.verify.outputs.skip != 'true' && (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && (inputs.dry_run == false || inputs.dry_run == 'false')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: 组织 Tap 密钥未配置时跳过
+        id: org_key
+        env:
+          ORG_TAP_KEY: ${{ secrets.HOMEBREW_ORG_TAP_DEPLOY_KEY }}
+        run: |
+          stripped="${ORG_TAP_KEY//[[:space:]]/}"
+          if [ -z "$stripped" ]; then
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            message='未配置 HOMEBREW_ORG_TAP_DEPLOY_KEY，已跳过 StarDreamTech/homebrew-tap。个人 Tap cpython666/homebrew-tap（HOMEBREW_TAP_DEPLOY_KEY）不因此失败。'
+            echo "$message"
+            echo "$message" >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=组织 Tap 已跳过::$message"
+          else
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          fi
+          unset stripped ORG_TAP_KEY
+      - uses: actions/checkout@v4
+        if: steps.org_key.outputs.configured == 'true'
+        with:
+          ref: ${{ needs.verify.outputs.source }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        if: steps.org_key.outputs.configured == 'true'
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        if: steps.org_key.outputs.configured == 'true'
+        with:
+          name: verified-homebrew-cask
+          path: verified
+      - uses: actions/checkout@v4
+        if: steps.org_key.outputs.configured == 'true'
+        with:
+          repository: StarDreamTech/homebrew-tap
+          ref: main
+          path: tap
+          ssh-key: ${{ secrets.HOMEBREW_ORG_TAP_DEPLOY_KEY }}
+      - name: 推送前再次读取公开版本
+        if: steps.org_key.outputs.configured == 'true'
+        uses: actions/github-script@v7
+        env:
+          RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+        with:
+          script: |
+            const fs = require('fs');
+            const release = (await github.rest.repos.getReleaseByTag({ ...context.repo, tag: process.env.RELEASE_TAG })).data;
+            const latest = (await github.rest.repos.getLatestRelease(context.repo)).data;
+            fs.writeFileSync('release.json', JSON.stringify(release));
+            fs.writeFileSync('latest-release.json', JSON.stringify(latest));
+      - name: 只向前更新组织 Tap 的 Cask
+        id: apply
+        if: steps.org_key.outputs.configured == 'true'
+        run: |
+          node scripts/homebrew-release.mjs recheck verified/evidence.json release.json latest-release.json
+          node scripts/homebrew-release.mjs apply verified/evidence.json verified/starshot.rb tap/Casks/starshot.rb > apply.json
+          node --input-type=module <<'JS'
+          import { appendFileSync, readFileSync } from 'node:fs';
+          const result = JSON.parse(readFileSync('apply.json', 'utf8'));
+          if (typeof result.changed !== 'boolean' || typeof result.reason !== 'string') throw new Error('Cask 更新结果无效。');
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${result.reason}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT, `changed=${result.changed}\n`);
+          JS
+      - name: 提交并推送组织 Tap
+        if: steps.org_key.outputs.configured == 'true' && steps.apply.outputs.changed == 'true'
+        env:
+          RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+        run: |
+          case "$RELEASE_TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo '拒绝异常版本标签。' >&2; exit 1 ;;
+          esac
+          cmp verified/starshot.rb tap/Casks/starshot.rb
+          git -C tap config user.name 'github-actions[bot]'
+          git -C tap config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -C tap add -- Casks/starshot.rb
+          test "$(git -C tap diff --cached --name-only)" = 'Casks/starshot.rb'
+          git -C tap commit -m "自动更新星镜 Cask 至 ${RELEASE_TAG}"
+          git -C tap push origin HEAD:main
+          echo "已用 HOMEBREW_ORG_TAP_DEPLOY_KEY 更新 StarDreamTech/homebrew-tap 至 ${RELEASE_TAG}。" >> "$GITHUB_STEP_SUMMARY"
