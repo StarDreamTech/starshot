@@ -24,7 +24,7 @@
 
 - 设置内手动检查更新、下载并校验签名；完成后弹出「安装并重启」或「稍后安装」。确认安装时备份最新编辑会话与旧应用副本，安装成功后自动重启，支持恢复本机会话。
 
-源码仓库：[cpython666/starshot](https://github.com/cpython666/starshot)。版本同步与签名流程见 [发布指南](docs/releases.md)，[0.3.2 已公开](https://github.com/cpython666/starshot/releases/tag/v0.3.2)，Homebrew安装与验收边界见 [分发说明](docs/homebrew.md)；0.1.0需手动升级才能获得应用内更新。
+源码仓库：[StarDreamTech/starshot](https://github.com/StarDreamTech/starshot)。版本同步与签名流程见 [发布指南](docs/releases.md)，[0.3.2 已公开](https://github.com/StarDreamTech/starshot/releases/tag/v0.3.2)，Homebrew安装与验收边界见 [分发说明](docs/homebrew.md)；0.1.0需手动升级才能获得应用内更新。
 
 Windows控件识别及helper源码位于[`src-tauri/src/window_regions/windows.rs`](src-tauri/src/window_regions/windows.rs)，公共截图界面为[`CaptureOverlay.vue`](src/components/CaptureOverlay.vue)。原生验收源码包含[`desktop/windows_integration.rs`](src-tauri/src/desktop/windows_integration.rs)、[`windows_smoke.rs`](src-tauri/src/desktop/windows_smoke.rs)和`tests/windows-*.py/js/cs`，不以自制闭源DLL代替实现。构建、原创夹具及复现入口见[Windows v3记录](docs/windows-native-v3.md)；本地源码状态与公开版本须以各次验证记录区分。
 
@@ -42,7 +42,7 @@ Apple Silicon Mac（macOS 12+）：
 brew install --cask cpython666/tap/starshot
 ```
 
-Windows x64 安装包及 macOS DMG 见 [0.3.2 下载](https://github.com/cpython666/starshot/releases/tag/v0.3.2)。macOS 尚未 Apple 公证，Windows 尚无平台发行者签名；两平台更新包均有独立Tauri更新签名。Windows 离线 OCR 模型合计约 12.2 MB，随安装包内置，主要识别拉丁文字和数字；macOS 使用系统 Vision，无需下载模型。
+Windows x64 安装包及 macOS DMG 见 [0.3.2 下载](https://github.com/StarDreamTech/starshot/releases/tag/v0.3.2)。macOS 尚未 Apple 公证，Windows 尚无平台发行者签名；两平台更新包均有独立Tauri更新签名。Windows 离线 OCR 模型合计约 12.2 MB，随安装包内置，主要识别拉丁文字和数字；macOS 使用系统 Vision，无需下载模型。
 
 ## 运行
 

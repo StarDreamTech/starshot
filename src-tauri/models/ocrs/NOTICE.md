@@ -16,7 +16,7 @@ Run `npm run models:prepare` before building from source. The build helper downl
 from the project's unchanged mirror and verifies both byte count and SHA-256
 before replacing a cached file. The original host returned HTTP 403 on 2026-10-28;
 the mirror preserves the exact copies retrieved and verified on 2026-10-26:
-https://github.com/cpython666/starshot/releases/tag/ocr-models-v1
+https://github.com/StarDreamTech/starshot/releases/tag/ocr-models-v1
 Model binaries are ignored by Git and embedded in the Windows executable at
 compile time. This build-dependency release is not an application update.
 
