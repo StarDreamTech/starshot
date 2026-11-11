@@ -36,9 +36,10 @@ Windows控件识别及helper源码位于[`src-tauri/src/window_regions/windows.r
 
 ## 安装与更新
 
-Apple Silicon Mac（macOS 12+）：
+Apple Silicon Mac（macOS 12+）可以使用组织安装源或仍可用的个人安装源，两处 Cask 内容相同：
 
 ```sh
+brew install --cask stardreamtech/tap/starshot
 brew install --cask cpython666/tap/starshot
 ```
 
