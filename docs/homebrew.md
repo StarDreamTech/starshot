@@ -2,7 +2,7 @@
 
 星镜使用已有的公开安装源 [cpython666/homebrew-tap](https://github.com/cpython666/homebrew-tap)，目标文件为 `Casks/starshot.rb`；现有 `Casks/starclip.rb` 独立保留。2026-10-26 核对远端默认分支为 `main`，基线提交为 `e11f8f06a43e4754855a8f101a39bc712aebdf08`，仓库没有额外 AGENTS 或发布工作流。
 
-[v0.3.2](https://github.com/cpython666/starshot/releases/tag/v0.3.2)已于北京时间2026-11-11公开并成为应用内最新更新。Tap的 `Casks/starshot.rb` 与安装说明已同步，发行提交为 [`9ff014c`](https://github.com/cpython666/homebrew-tap/commit/9ff014cb18bf6f4c228e669c64ef24f61e978868)，可执行 `brew install --cask cpython666/tap/starshot`。仅提供Apple Silicon、macOS 12+；Windows使用独立NSIS安装包。
+[v0.3.2](https://github.com/StarDreamTech/starshot/releases/tag/v0.3.2)已于北京时间2026-11-11公开并成为应用内最新更新。Tap的 `Casks/starshot.rb` 与安装说明已同步，发行提交为 [`9ff014c`](https://github.com/cpython666/homebrew-tap/commit/9ff014cb18bf6f4c228e669c64ef24f61e978868)，可执行 `brew install --cask cpython666/tap/starshot`。仅提供Apple Silicon、macOS 12+；Windows使用独立NSIS安装包。
 
 ## 生成 Cask
 

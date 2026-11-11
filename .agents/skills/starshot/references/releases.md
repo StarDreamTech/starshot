@@ -1,6 +1,15 @@
 # 更新、恢复与版本
 
-用户于2026-10-26明确要求迁入星笺的更新与版本机制、关联远端，并确认公开仓库提供更新下载。仓库为 https://github.com/cpython666/starshot。详细操作和验收边界在 docs/releases.md / docs/verification.md。
+用户于2026-10-26明确要求迁入星笺的更新与版本机制、关联远端，并确认公开仓库提供更新下载。仓库现为 https://github.com/StarDreamTech/starshot。详细操作和验收边界在 docs/releases.md / docs/verification.md。
+
+## 仓库 owner（2026-11-11）
+
+- 规范公开仓库是 StarDreamTech/starshot。`cpython666/starshot` 现为该仓库的 fork，`main` 与上游同一提交，但没有 Release；旧的 Release、Actions 和 `latest.json` 地址返回 404。
+- 应用内更新端点、`updater.rs` 下载白名单、仓库/反馈链接、分享文案与海报绘制、Windows 构建期 OCR 镜像、Cask 生成器，以及 CI 拉取 v0.3.0 安装包的地址，都只把 owner 换成 StarDreamTech，路径不变。
+- 2026-11-11 从 `https://github.com/StarDreamTech/starshot/releases/download/ocr-models-v1/` 实际下载 `text-detection.rten`（2510284 字节，`f15cfb56bd02c4bf478a20343986504a1f01e1665c2b3a0ad66340f054b1b5ca`）和 `text-recognition.rten`（9716568 字节，`e484866d4cce403175bd8d00b128feb08ab42e208de30e42cd9889d8f1735a6e`），与 `scripts/prepare-ocr-models.mjs` 的固定值一致。v0.3.0 Windows 安装包在新地址的 GitHub 摘要为 `e437c0ac62f125c0947d9b7192a1e9d6c2500bb9d37437a526b8e399df39b0a1`，与工作流里的固定哈希一致。
+- 已公开 v0.3.2 的 `latest.json` 仍可从 StarDreamTech 的 `/releases/latest/download/latest.json` 下载，但正文里 darwin-aarch64 与 windows-x86_64 的安装包 URL 仍使用旧 owner `cpython666`，路径仍是 `/releases/download/v0.3.2/` 下的安装包文件名。新白名单不接受这些地址，旧 owner 上的 Release 也返回 404。`release.yml` 组装时传入 `GITHUB_REPOSITORY`，下次发行会写成新 owner。这次没有重新发布清单。
+- Homebrew 安装名仍是 `cpython666/tap/starshot`。`cpython666/homebrew-tap` 与 `StarDreamTech/homebrew-tap` 的 `Casks/starshot.rb` 内容相同，且已经指向新仓库的 DMG。这次没有改 tap。
+- `docs/verification.md` 的历史验收链接按当时记录保留。分享海报没有入库位图，只改了 `src/share.ts` 的绘制文字，运行时仍由现有 canvas 流程生成。
 
 - 版本由 scripts/version.mjs 校验/递增，同步 npm/Cargo/Tauri 六个版本字段；标签必须 vX.Y.Z。当前0.3.2已公开为稳定latest，0.3.0保留为开发预览；0.2.2引入下载后安装确认，旧0.1.0无updater，须手动升级。
 - src-tauri/src/updater.rs 与 desktop.rs 使用官方 Tauri updater，限制本仓库下载地址，要求更新签名绑定版本。检查和下载均手动触发，无启动联网。0.2.2 的 download_starshot_update 只下载验签，成功才缓存字节并进入 ready/downloadReady，再唤起主窗口显示「安装并重启」；下载阶段不保存会话、不安装、不重启。

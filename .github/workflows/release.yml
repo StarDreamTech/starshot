@@ -119,7 +119,7 @@ jobs:
         shell: pwsh
         run: |
           $previous = Join-Path $env:RUNNER_TEMP 'Starshot_0.3.0_x64-setup.exe'
-          Invoke-WebRequest 'https://github.com/cpython666/starshot/releases/download/v0.3.0/Starshot_0.3.0_x64-setup.exe' -OutFile $previous
+          Invoke-WebRequest 'https://github.com/StarDreamTech/starshot/releases/download/v0.3.0/Starshot_0.3.0_x64-setup.exe' -OutFile $previous
           if ((Get-FileHash $previous -Algorithm SHA256).Hash -ne 'e437c0ac62f125c0947d9b7192a1e9d6c2500bb9d37437a526b8e399df39b0a1') { throw 'Previous release hash mismatch.' }
           "STARSHOT_PREVIOUS_INSTALLER=$previous" >> $env:GITHUB_ENV
       - name: Verify isolated Windows upgrade and uninstallation

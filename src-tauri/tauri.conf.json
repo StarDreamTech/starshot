@@ -57,7 +57,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNGMjJDN0U5Q0NGMUVBMDcKUldRSDZ2SE02Y2NpUDdqM3NYa2l2bldsWDlEdXBRd3YrVmdvZGlWa1BZTlZwWjNaUlZWODFEdGYK",
       "endpoints": [
-        "https://github.com/cpython666/starshot/releases/latest/download/latest.json"
+        "https://github.com/StarDreamTech/starshot/releases/latest/download/latest.json"
       ],
       "windows": {
         "installMode": "passive"

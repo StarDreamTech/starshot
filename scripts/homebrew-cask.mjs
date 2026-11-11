@@ -27,11 +27,11 @@ export async function generateHomebrewCask({ dmgPath, outputPath, version, tag =
   version "${version}"
   sha256 "${sha256}"
 
-  url "https://github.com/cpython666/starshot/releases/download/v#{version}/Starshot_#{version}_aarch64.dmg"
+  url "https://github.com/StarDreamTech/starshot/releases/download/v#{version}/Starshot_#{version}_aarch64.dmg"
   name "Starshot"
   name "星镜"
   desc "Local-first screenshot, annotation and image pinning tool"
-  homepage "https://github.com/cpython666/starshot"
+  homepage "https://github.com/StarDreamTech/starshot"
 
   livecheck do
     url :url
@@ -47,7 +47,7 @@ export async function generateHomebrewCask({ dmgPath, outputPath, version, tag =
   caveats <<~EOS
     This is Starshot ${version} for Apple Silicon Macs.
     It is not Apple-notarized; macOS may block the first launch.
-    See the release notes before installing: https://github.com/cpython666/starshot/releases/tag/${tag}
+    See the release notes before installing: https://github.com/StarDreamTech/starshot/releases/tag/${tag}
   EOS
 end
 `;

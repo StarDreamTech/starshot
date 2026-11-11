@@ -1447,8 +1447,8 @@ fn reveal_saved_image(app: AppHandle, window: WebviewWindow) -> Result<()> {
 }
 fn project_link(target: &str) -> Result<&'static str> {
     match target {
-        "repository" => Ok("https://github.com/cpython666/starshot"),
-        "issues" => Ok("https://github.com/cpython666/starshot/issues/new"),
+        "repository" => Ok("https://github.com/StarDreamTech/starshot"),
+        "issues" => Ok("https://github.com/StarDreamTech/starshot/issues/new"),
         _ => Err("不支持的项目链接".into()),
     }
 }
@@ -2928,11 +2928,11 @@ mod lifecycle_tests {
     fn project_links_only_allow_fixed_public_destinations() {
         assert_eq!(
             super::project_link("repository").unwrap(),
-            "https://github.com/cpython666/starshot"
+            "https://github.com/StarDreamTech/starshot"
         );
         assert_eq!(
             super::project_link("issues").unwrap(),
-            "https://github.com/cpython666/starshot/issues/new"
+            "https://github.com/StarDreamTech/starshot/issues/new"
         );
         for target in [
             "",

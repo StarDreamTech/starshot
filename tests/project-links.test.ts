@@ -4,8 +4,8 @@ import { openProjectLink, projectLinks } from '../src/project-links.ts'
 
 test('browser links keep native navigation and expose only the project and feedback URLs', async () => {
   assert.deepEqual(projectLinks, {
-    repository: 'https://github.com/cpython666/starshot',
-    issues: 'https://github.com/cpython666/starshot/issues/new',
+    repository: 'https://github.com/StarDreamTech/starshot',
+    issues: 'https://github.com/StarDreamTech/starshot/issues/new',
   })
   let prevented = false
   await openProjectLink({ preventDefault() { prevented = true } } as MouseEvent, 'repository')
