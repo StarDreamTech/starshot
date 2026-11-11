@@ -2,6 +2,8 @@
 
 **把灵感，定格成星。** 本地优先的桌面截图、标注、置顶贴图与图片美化工具，使用 Rust / Tauri 2 / Vue 3 / TypeScript。名称、中文界面和五套外观沿用用户的星空系列偏好，作为独立产品开发，不包含桌面宠物。
 
+**[项目介绍 / Project site](https://stardreamtech.github.io/projects/starshot/)**
+
 当前版本 **0.3.2**，已进入应用内更新通道，macOS / Windows 同为目标平台。原生实测、自动检查、双平台构建和安装结果分别记录在 [验证记录](docs/verification.md)。
 
 ## 当前功能
