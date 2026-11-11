@@ -1,8 +1,8 @@
 # 星镜 Homebrew 分发
 
-星镜的 Cask 同时放在个人安装源 [cpython666/homebrew-tap](https://github.com/cpython666/homebrew-tap) 和组织安装源 [StarDreamTech/homebrew-tap](https://github.com/StarDreamTech/homebrew-tap)，目标文件都是 `Casks/starshot.rb`。两个仓库里的 `Casks/starclip.rb` 独立保留。2026-10-26 核对个人 Tap 的默认分支为 `main`，基线提交为 `e11f8f06a43e4754855a8f101a39bc712aebdf08`，该 Tap 仓库没有额外 AGENTS 或发布工作流。
+星镜由星梦科技 StarDreamTech 维护。组织主页是 [stardreamtech.github.io](https://stardreamtech.github.io/)，项目介绍是 [stardreamtech.github.io/projects/starshot](https://stardreamtech.github.io/projects/starshot/)。Cask 同时放在个人安装源 [cpython666/homebrew-tap](https://github.com/cpython666/homebrew-tap) 和组织安装源 [StarDreamTech/homebrew-tap](https://github.com/StarDreamTech/homebrew-tap)，目标文件都是 `Casks/starshot.rb`。两个仓库里的 `Casks/starclip.rb` 独立保留。Cask 的 `homepage` 仍固定为 GitHub 仓库 `https://github.com/StarDreamTech/starshot`，不改成组织主页。2026-10-26 核对个人 Tap 的默认分支为 `main`，基线提交为 `e11f8f06a43e4754855a8f101a39bc712aebdf08`，该 Tap 仓库没有额外 AGENTS 或发布工作流。
 
-[v0.3.2](https://github.com/StarDreamTech/starshot/releases/tag/v0.3.2)已于北京时间2026-11-11公开并成为应用内最新更新。2026-11-11 读取两个远端 `Casks/starshot.rb`，内容相同，都指向该 Release 的 DMG。个人 Tap 的发行提交为 [`9ff014c`](https://github.com/cpython666/homebrew-tap/commit/9ff014cb18bf6f4c228e669c64ef24f61e978868)。仅提供 Apple Silicon、macOS 12+；Windows 使用独立 NSIS 安装包。
+[v0.3.2](https://github.com/StarDreamTech/starshot/releases/tag/v0.3.2)已于北京时间2026-11-11公开并成为应用内最新更新。源码已准备 0.3.3，但尚未打标签或公开发布，因此两个 Tap 与应用内稳定通道仍是 0.3.2。2026-11-11 读取两个远端 `Casks/starshot.rb`，内容相同，都指向该 Release 的 DMG。个人 Tap 的发行提交为 [`9ff014c`](https://github.com/cpython666/homebrew-tap/commit/9ff014cb18bf6f4c228e669c64ef24f61e978868)。仅提供 Apple Silicon、macOS 12+；Windows 使用独立 NSIS 安装包。
 
 ```sh
 brew install --cask stardreamtech/tap/starshot

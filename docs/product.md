@@ -1,6 +1,6 @@
 # 星镜产品范围
 
-发行状态：v0.3.2已公开，包含长截图、截图键鼠、贴图、设置及托盘改进；双平台构建不等于所有原生交互已验收。本机日用应用没有因本次发布自动替换，具体证据见[验证记录](verification.md)。下文产品讨论日期保留当时的开发背景。
+发行状态：v0.3.2已公开，包含长截图、截图键鼠、贴图、设置及托盘改进；双平台构建不等于所有原生交互已验收。源码版本已准备为 0.3.3，用于仓库迁入星梦科技 StarDreamTech 后的宣传与更新源调整，尚未打标签或公开发布。本机日用应用没有因本次发布自动替换，具体证据见[验证记录](verification.md)。下文产品讨论日期保留当时的开发背景。
 
 ## 已确认方向
 
@@ -123,4 +123,4 @@
 
 ## 版本与分发
 
-用户于2026-10-26要求迁入版本、更新机制并关联远端，确认使用公开仓库提供下载。仓库现为 [StarDreamTech/starshot](https://github.com/StarDreamTech/starshot)。六处版本统一、严格递增升版、独立签名密钥、双平台完整验签后生成 Release 草稿；不自动公开发行。0.3.0曾公开为开发预览；0.3.1已在2026-10-28本次明确授权后公开为最新版本，并同步Homebrew Cask，旧0.3.0原生应用已实测发现更新。详细流程与0.1.0手动升级边界见 [发布指南](releases.md)。
+用户于2026-10-26要求迁入版本、更新机制并关联远端，确认使用公开仓库提供下载。仓库现为 [StarDreamTech/starshot](https://github.com/StarDreamTech/starshot)，由星梦科技 StarDreamTech 维护。组织主页是 [stardreamtech.github.io](https://stardreamtech.github.io/)，项目介绍是 [stardreamtech.github.io/projects/starshot](https://stardreamtech.github.io/projects/starshot/)。六处版本统一、严格递增升版、独立签名密钥、双平台完整验签后生成 Release 草稿；不自动公开发行。0.3.0曾公开为开发预览；0.3.1已在2026-10-28本次明确授权后公开为最新版本，并同步Homebrew Cask，旧0.3.0原生应用已实测发现更新。详细流程与0.1.0手动升级边界见 [发布指南](releases.md)。

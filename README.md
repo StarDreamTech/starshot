@@ -4,7 +4,7 @@
 
 **[项目介绍 / Project site](https://stardreamtech.github.io/projects/starshot/)**
 
-当前版本 **0.3.2**，已进入应用内更新通道，macOS / Windows 同为目标平台。原生实测、自动检查、双平台构建和安装结果分别记录在 [验证记录](docs/verification.md)。
+当前源码版本 **0.3.3**，尚未打标签或公开发布。已公开的稳定版仍是 **0.3.2**，macOS / Windows 同为目标平台。原生实测、自动检查、双平台构建和安装结果分别记录在 [验证记录](docs/verification.md)。
 
 ## 当前功能
 
@@ -26,7 +26,7 @@
 
 - 设置内手动检查更新、下载并校验签名；完成后弹出「安装并重启」或「稍后安装」。确认安装时备份最新编辑会话与旧应用副本，安装成功后自动重启，支持恢复本机会话。
 
-源码仓库：[StarDreamTech/starshot](https://github.com/StarDreamTech/starshot)。版本同步与签名流程见 [发布指南](docs/releases.md)，[0.3.2 已公开](https://github.com/StarDreamTech/starshot/releases/tag/v0.3.2)，Homebrew安装与验收边界见 [分发说明](docs/homebrew.md)；0.1.0需手动升级才能获得应用内更新。
+星梦科技 StarDreamTech 维护源码仓库 [StarDreamTech/starshot](https://github.com/StarDreamTech/starshot)。组织主页：[stardreamtech.github.io](https://stardreamtech.github.io/)，项目介绍：[星镜 Starshot](https://stardreamtech.github.io/projects/starshot/)。版本同步与签名流程见 [发布指南](docs/releases.md)，[0.3.2 已公开](https://github.com/StarDreamTech/starshot/releases/tag/v0.3.2)，Homebrew安装与验收边界见 [分发说明](docs/homebrew.md)；0.1.0需手动升级才能获得应用内更新。0.3.3 公开之前，应用内稳定更新通道仍是 0.3.2。
 
 Windows控件识别及helper源码位于[`src-tauri/src/window_regions/windows.rs`](src-tauri/src/window_regions/windows.rs)，公共截图界面为[`CaptureOverlay.vue`](src/components/CaptureOverlay.vue)。原生验收源码包含[`desktop/windows_integration.rs`](src-tauri/src/desktop/windows_integration.rs)、[`windows_smoke.rs`](src-tauri/src/desktop/windows_smoke.rs)和`tests/windows-*.py/js/cs`，不以自制闭源DLL代替实现。构建、原创夹具及复现入口见[Windows v3记录](docs/windows-native-v3.md)；本地源码状态与公开版本须以各次验证记录区分。
 
@@ -38,7 +38,7 @@ Windows控件识别及helper源码位于[`src-tauri/src/window_regions/windows.r
 
 ## 安装与更新
 
-Apple Silicon Mac（macOS 12+）可以使用组织安装源或仍可用的个人安装源，两处 Cask 内容相同：
+Apple Silicon Mac（macOS 12+）可以使用星梦科技 StarDreamTech 的组织安装源，或仍可用的个人安装源。两处 Cask 内容相同，下载地址都指向组织仓库的 Release：
 
 ```sh
 brew install --cask stardreamtech/tap/starshot
@@ -86,3 +86,19 @@ npm run tauri -- build --bundles nsis    # Windows
 当前仍需补齐系统控件识别的真实跨应用验收、长截图复杂页面支持及双平台原生矩阵、独立全文OCR/Windows中文模型、跨屏连续选区、贴图分组、GIF等；不做可编辑项目文件导入导出。长截图自动滚动与横向拼接已包含在0.3.2。完整范围、限制和后续验收见 [产品说明](docs/product.md)，竞品资料与采用决策见 [截图交互研究](docs/screenshot-research.md)。
 
 交互研究参考 [Snipaste官网](https://www.snipaste.com/)（2026-10-26访问）；品牌、UI、图标、演示素材和实现独立制作。没有复用竞品代码、素材或产品名称。星镜不是已达到竞品全部功能的成品。
+
+## English
+
+Starshot is a local-first screenshot, annotation, pinning, and image-styling app for macOS and Windows, maintained by StarDreamTech (星梦科技).
+
+- Source: [StarDreamTech/starshot](https://github.com/StarDreamTech/starshot)
+- Organization: [stardreamtech.github.io](https://stardreamtech.github.io/)
+- Project page: [stardreamtech.github.io/projects/starshot](https://stardreamtech.github.io/projects/starshot/)
+- Source version **0.3.3** is not tagged or published yet. The public stable release remains [0.3.2](https://github.com/StarDreamTech/starshot/releases/tag/v0.3.2).
+
+```sh
+brew install --cask stardreamtech/tap/starshot
+brew install --cask cpython666/tap/starshot
+```
+
+The second command is the existing personal tap. Both casks install the same build from the organization repository. Installed 0.3.2 apps still check `cpython666/starshot` for updates and accept downloads only from that repository; publishing 0.3.3 on StarDreamTech/starshot alone does not update those clients.

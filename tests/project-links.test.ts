@@ -4,9 +4,12 @@ import { openProjectLink, projectLinks } from '../src/project-links.ts'
 
 test('browser links keep native navigation and expose only the project and feedback URLs', async () => {
   assert.deepEqual(projectLinks, {
+    organization: 'https://stardreamtech.github.io/',
+    project: 'https://stardreamtech.github.io/projects/starshot/',
     repository: 'https://github.com/StarDreamTech/starshot',
     issues: 'https://github.com/StarDreamTech/starshot/issues/new',
   })
+  assert.equal(JSON.stringify(projectLinks).includes('cpython666'), false)
   let prevented = false
   await openProjectLink({ preventDefault() { prevented = true } } as MouseEvent, 'repository')
   assert.equal(prevented, false)
@@ -27,10 +30,14 @@ test('desktop links invoke the allowlisted native command and propagate failures
   try {
     let prevented = 0
     const event = { preventDefault() { prevented++ } } as MouseEvent
+    await openProjectLink(event, 'organization')
+    await openProjectLink(event, 'project')
     await openProjectLink(event, 'repository')
     await openProjectLink(event, 'issues')
-    assert.equal(prevented, 2)
+    assert.equal(prevented, 4)
     assert.deepEqual(calls, [
+      ['open_project_link', { target: 'organization' }, undefined],
+      ['open_project_link', { target: 'project' }, undefined],
       ['open_project_link', { target: 'repository' }, undefined],
       ['open_project_link', { target: 'issues' }, undefined],
     ])
